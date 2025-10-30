@@ -13,6 +13,7 @@ media/
 staticfiles/
 local_settings.py
 
+
 # Environment
 .env
 .env.local
