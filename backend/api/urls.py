@@ -21,6 +21,33 @@ urlpatterns = [
     # Health Check
     path('health/', views.HealthCheckView.as_view(), name='health_check'),
     
+    # Authentication Endpoints
+    path('auth/register/', views.RegisterView.as_view(), name='register'),
+    path('auth/login/', views.LoginView.as_view(), name='login'),
+    path('auth/logout/', views.LogoutView.as_view(), name='logout'),
+    
+    # Google OAuth Endpoints
+    path('auth/google/', views.GoogleLoginView.as_view(), name='google_login'),
+    path('auth/google/callback/', views.GoogleCallbackView.as_view(), name='google_callback'),
+    
+    # Database Stats (for verification)
+    path('db/stats/', views.DatabaseStatsView.as_view(), name='db_stats'),
+    
+    # Student Dashboard Endpoints
+    path('student/fitness/', views.StudentFitnessView.as_view(), name='student_fitness'),
+    path('student/fitness/sync-google-fit/', views.GoogleFitSyncView.as_view(), name='sync_google_fit'),
+    path('student/schedule/', views.StudentScheduleView.as_view(), name='student_schedule'),
+    
+    # Admin/Coach Endpoints
+    path('admin/students-fitness/', views.AllStudentsFitnessView.as_view(), name='all_students_fitness'),
+    
+    # Tournament Endpoints
+    path('tournaments/', views.TournamentListView.as_view(), name='tournaments'),
+    path('tournaments/<int:tournament_id>/register/', views.TournamentRegisterView.as_view(), name='tournament_register'),
+    
+    # Leaderboard
+    path('leaderboard/', views.LeaderboardView.as_view(), name='leaderboard'),
+    
     # Posture Analysis Endpoints
     # Note: These views handle the POST requests for file analysis
     path('posture/analyze_image/', views.AnalyzeImageView.as_view(), name='analyze_image'),

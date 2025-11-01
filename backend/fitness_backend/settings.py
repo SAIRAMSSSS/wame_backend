@@ -30,7 +30,18 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-+-j%fovtpmu25nr9g$31*
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get('ALLOWED_HOSTS') else []
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get('ALLOWED_HOSTS') else ['*']
+
+
+# CORS Configuration for Next.js frontend
+CORS_ALLOW_ALL_ORIGINS = True  # For development only
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:3002",
+    "http://127.0.0.1:3000",
+]
 
 
 # Application definition
@@ -44,6 +55,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third-party apps
     'rest_framework',  # Django REST Framework
+    'rest_framework.authtoken',  # Token authentication
+    'corsheaders',  # Django CORS Headers
     'pwa',# Django PWA
     'api.apps.ApiConfig',
     # Your project apps go here
@@ -52,6 +65,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # CORS middleware (must be before CommonMiddleware)
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -83,22 +97,26 @@ WSGI_APPLICATION = 'fitness_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# Postgres configuration using environment variables
-if os.environ.get('DATABASE_URL'):
-    import dj_database_url
-    DATABASES = {
-        'default': dj_database_url.config(default=os.environ.get('DATABASE_URL'))
-    }
-else:
-    # Supabase PostgreSQL configuration
+# Supabase PostgreSQL configuration (or local SQLite for development)
+USE_SUPABASE = os.environ.get('USE_SUPABASE', 'False') == 'True'
+
+if USE_SUPABASE:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.environ.get('DB_NAME', 'postgres'),
             'USER': os.environ.get('DB_USER', 'postgres'),
             'PASSWORD': os.environ.get('DB_PASSWORD', '12345678'),
-            'HOST': 'db.xnhnrsoqbmcursawxjoq.supabase.co',
+            'HOST': os.environ.get('DB_HOST', 'db.xnhnrsoqbmcursawxjoq.supabase.co'),
             'PORT': os.environ.get('DB_PORT', '5432'),
+        }
+    }
+else:
+    # SQLite for local development
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
     
@@ -157,9 +175,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # --- Django REST Framework Settings ---
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny', # A common starting point
+        'rest_framework.permissions.IsAuthenticated', # Require authentication by default
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',  # Token auth for API
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication'
     ],
