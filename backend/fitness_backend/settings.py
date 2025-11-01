@@ -90,11 +90,15 @@ if os.environ.get('DATABASE_URL'):
         'default': dj_database_url.config(default=os.environ.get('DATABASE_URL'))
     }
 else:
-    # Default to SQLite if environment variables aren't set
+    # Supabase PostgreSQL configuration
     DATABASES = {
         'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'postgres'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', '12345678'),
+            'HOST': 'db.xnhnrsoqbmcursawxjoq.supabase.co',
+            'PORT': os.environ.get('DB_PORT', '5432'),
         }
     }
     
