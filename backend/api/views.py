@@ -16,7 +16,21 @@ import os
 import random
 
 # Google OAuth imports
-from google.oauth2.credentials import Credentials
+try:
+    from google.oauth2.credentials import Credentials
+except ImportError:
+    # Fallback stub so editors/linters don't show unresolved import when
+    # google-auth is not installed in the environment.
+    # Install the real package for production: pip install google-auth google-auth-oauthlib google-api-python-client
+    class Credentials:
+        def __init__(self, token=None, refresh_token=None, token_uri=None,
+                     client_id=None, client_secret=None, scopes=None, **kwargs):
+            self.token = token
+            self.refresh_token = refresh_token
+            self.token_uri = token_uri
+            self.client_id = client_id
+            self.client_secret = client_secret
+            self.scopes = scopes or []
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -467,6 +481,71 @@ class ProfileViewSet(viewsets.ModelViewSet):
         profile = get_object_or_404(Profile, user=request.user)
         serializer = self.get_serializer(profile)
         return Response(serializer.data)
+    
+    # Custom Endpoint: PUT/PATCH /api/profiles/update-profile/
+    @action(detail=False, methods=['put', 'patch'], url_path='update-profile')
+    def update_profile(self, request):
+        """Update the profile of the currently authenticated user."""
+        profile = get_object_or_404(Profile, user=request.user)
+        serializer = self.get_serializer(profile, data=request.data, partial=True)
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "message": "Profile updated successfully",
+                "profile": serializer.data,
+                "profile_completed": serializer.data.get('profile_completed', False)
+            }, status=status.HTTP_200_OK)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Custom Endpoint: GET /api/profiles/check-completion/
+    @action(detail=False, methods=['get'], url_path='check-completion')
+    def check_completion(self, request):
+        """Check if the user's profile is complete."""
+        profile = get_object_or_404(Profile, user=request.user)
+        
+        missing_fields = []
+        if not request.user.first_name:
+            missing_fields.append('first_name')
+        if not request.user.email:
+            missing_fields.append('email')
+        if not profile.coach_name:
+            missing_fields.append('coach_name')
+        if not profile.team_name:
+            missing_fields.append('team_name')
+        if not profile.team_role:
+            missing_fields.append('team_role')
+        
+        return Response({
+            "profile_completed": profile.profile_completed,
+            "missing_fields": missing_fields,
+            "message": "Please complete your profile to access all features." if missing_fields else "Profile is complete!"
+        }, status=status.HTTP_200_OK)
+    
+    # Custom Endpoint: POST /api/profiles/upload-picture/
+    @action(detail=False, methods=['post'], url_path='upload-picture')
+    def upload_picture(self, request):
+        """Upload profile picture for the current user."""
+        profile = get_object_or_404(Profile, user=request.user)
+        
+        if 'profile_picture' not in request.FILES:
+            return Response({
+                "error": "No profile picture provided"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Delete old profile picture if exists
+        if profile.profile_picture:
+            profile.profile_picture.delete(save=False)
+        
+        profile.profile_picture = request.FILES['profile_picture']
+        profile.save()
+        
+        serializer = self.get_serializer(profile, context={'request': request})
+        return Response({
+            "message": "Profile picture uploaded successfully",
+            "profile_picture_url": serializer.data.get('profile_picture_url')
+        }, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
         # Automatically set the user for the profile (this should typically be done on User creation)

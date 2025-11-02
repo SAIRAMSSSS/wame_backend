@@ -18,6 +18,8 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
 
 urlpatterns = [
     # Django Admin site
@@ -26,4 +28,8 @@ urlpatterns = [
     # All API endpoints start with '/api/' and are directed to the 'api' app's urls.py
     path('api/', include('api.urls')), 
 ]
+
+# Serve media files during development
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
