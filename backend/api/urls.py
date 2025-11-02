@@ -4,12 +4,19 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 
-# Create a router to handle ModelViewSet URLs (Profiles, Workouts, Exercises)
+# Create a router to handle ModelViewSet URLs (Profiles, Workouts, Exercises, Tournaments)
 router = DefaultRouter()
 router.register('profiles', views.ProfileViewSet, basename='profile')
 router.register('workouts', views.WorkoutViewSet, basename='workout')
 router.register('exercises', views.ExerciseViewSet, basename='exercise')
 router.register('posture', views.PostureAnalysisViewSet, basename='analysis')
+
+# Tournament Management ViewSets
+router.register('tournaments', views.TournamentViewSet, basename='tournament')
+router.register('teams', views.TeamViewSet, basename='team')
+router.register('players', views.PlayerViewSet, basename='player')
+router.register('matches', views.MatchViewSet, basename='match')
+router.register('spirit-scores', views.SpiritScoreViewSet, basename='spirit-score')
 
 # The main URL patterns for your 'api' app
 urlpatterns = [
@@ -41,11 +48,22 @@ urlpatterns = [
     # Admin/Coach Endpoints
     path('admin/students-fitness/', views.AllStudentsFitnessView.as_view(), name='all_students_fitness'),
     
-    # Tournament Endpoints
-    path('tournaments/', views.TournamentListView.as_view(), name='tournaments'),
-    path('tournaments/<int:tournament_id>/register/', views.TournamentRegisterView.as_view(), name='tournament_register'),
+    # Note: Tournament endpoints now handled by router (ViewSets)
+    # - GET/POST /api/tournaments/ - List/Create tournaments
+    # - GET/PUT/PATCH/DELETE /api/tournaments/{id}/ - Tournament detail
+    # - GET /api/tournaments/{id}/leaderboard/ - Tournament leaderboard
+    # - GET /api/tournaments/{id}/spirit_rankings/ - Spirit rankings
+    # - GET /api/tournaments/{id}/schedule/ - Tournament schedule
+    # - GET/POST /api/teams/ - List/Register teams
+    # - POST /api/teams/{id}/approve/ - Approve team
+    # - POST /api/teams/{id}/reject/ - Reject team
+    # - GET/POST /api/matches/ - List/Create matches
+    # - POST /api/matches/{id}/update_score/ - Update match score
+    # - POST /api/matches/{id}/complete/ - Complete match
+    # - GET/POST /api/spirit-scores/ - List/Submit spirit scores
+    # - POST /api/spirit-scores/{id}/submit/ - Submit spirit score
     
-    # Leaderboard
+    # Fitness Leaderboard
     path('leaderboard/', views.LeaderboardView.as_view(), name='leaderboard'),
     
     # Posture Analysis Endpoints

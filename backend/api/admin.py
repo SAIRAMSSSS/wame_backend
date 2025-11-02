@@ -1,7 +1,8 @@
 from django.contrib import admin
 from .models import (
-    Profile, Workout, Exercise, PostureAnalysis, 
-    FitnessLog, Tournament, TournamentRegistration, Schedule
+    Profile, Workout, Exercise, PostureAnalysis, FitnessLog,
+    Tournament, Team, Player, Match, Field, SpiritScore, Attendance,
+    TournamentAnnouncement, VisitorRegistration, Schedule
 )
 
 # Register your models here.
@@ -74,15 +75,148 @@ class PostureAnalysisAdmin(admin.ModelAdmin):
 
 @admin.register(Tournament)
 class TournamentAdmin(admin.ModelAdmin):
-    list_display = ['name', 'location', 'start_date', 'end_date', 'status', 'max_participants']
-    list_filter = ['status', 'start_date']
-    search_fields = ['name', 'location']
+    list_display = ['name', 'location', 'start_date', 'end_date', 'status', 'max_teams', 'tournament_director']
+    list_filter = ['status', 'tournament_format', 'start_date']
+    search_fields = ['name', 'location', 'tournament_director__username']
+    readonly_fields = ['created_at', 'updated_at']
+    filter_horizontal = ()
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('name', 'description', 'rules', 'location')
+        }),
+        ('Tournament Details', {
+            'fields': ('tournament_format', 'status', 'max_teams', 'min_players_per_team', 'max_players_per_team')
+        }),
+        ('Dates', {
+            'fields': ('start_date', 'end_date', 'registration_deadline')
+        }),
+        ('Branding & Media', {
+            'fields': ('banner_image', 'sponsors')
+        }),
+        ('Administration', {
+            'fields': ('tournament_director', 'created_at', 'updated_at')
+        }),
+    )
 
-@admin.register(TournamentRegistration)
-class TournamentRegistrationAdmin(admin.ModelAdmin):
-    list_display = ['tournament', 'user', 'team_name', 'registered_at']
-    list_filter = ['tournament', 'registered_at']
-    search_fields = ['user__username', 'team_name']
+@admin.register(Field)
+class FieldAdmin(admin.ModelAdmin):
+    list_display = ['name', 'tournament', 'is_active']
+    list_filter = ['tournament', 'is_active']
+    search_fields = ['name', 'tournament__name']
+
+@admin.register(Team)
+class TeamAdmin(admin.ModelAdmin):
+    list_display = ['name', 'tournament', 'captain', 'status', 'wins', 'losses', 'average_spirit_score']
+    list_filter = ['tournament', 'status']
+    search_fields = ['name', 'captain__username', 'home_city']
+    readonly_fields = ['wins', 'losses', 'draws', 'points_for', 'points_against', 'average_spirit_score', 'registered_at', 'updated_at']
+    
+    fieldsets = (
+        ('Team Information', {
+            'fields': ('tournament', 'name', 'home_city', 'team_logo', 'status')
+        }),
+        ('Management', {
+            'fields': ('captain', 'manager')
+        }),
+        ('Statistics', {
+            'fields': ('wins', 'losses', 'draws', 'points_for', 'points_against', 'average_spirit_score'),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('registered_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+@admin.register(Player)
+class PlayerAdmin(admin.ModelAdmin):
+    list_display = ['full_name', 'team', 'jersey_number', 'position', 'age', 'gender', 'is_verified']
+    list_filter = ['tournament', 'team', 'gender', 'experience_level', 'is_verified']
+    search_fields = ['full_name', 'email', 'team__name']
+    readonly_fields = ['registered_at']
+
+@admin.register(Match)
+class MatchAdmin(admin.ModelAdmin):
+    list_display = ['match_number', 'tournament', 'team_a', 'team_b', 'match_date', 'start_time', 'field', 'status']
+    list_filter = ['tournament', 'status', 'match_date', 'field']
+    search_fields = ['team_a__name', 'team_b__name']
+    readonly_fields = ['created_at', 'updated_at']
+    date_hierarchy = 'match_date'
+    
+    fieldsets = (
+        ('Match Details', {
+            'fields': ('tournament', 'match_number', 'round_number', 'field')
+        }),
+        ('Teams', {
+            'fields': ('team_a', 'team_b')
+        }),
+        ('Schedule', {
+            'fields': ('match_date', 'start_time', 'end_time')
+        }),
+        ('Scores & Status', {
+            'fields': ('team_a_score', 'team_b_score', 'status')
+        }),
+        ('Officials', {
+            'fields': ('referee', 'scorer')
+        }),
+        ('Media', {
+            'fields': ('photos',),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+@admin.register(SpiritScore)
+class SpiritScoreAdmin(admin.ModelAdmin):
+    list_display = ['match', 'scoring_team', 'receiving_team', 'total_score', 'is_submitted', 'submitted_at']
+    list_filter = ['match__tournament', 'is_submitted', 'submitted_at']
+    search_fields = ['scoring_team__name', 'receiving_team__name']
+    readonly_fields = ['total_score', 'created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Match & Teams', {
+            'fields': ('match', 'scoring_team', 'receiving_team')
+        }),
+        ('Spirit Categories (0-4 scale)', {
+            'fields': ('rules_knowledge', 'fouls_and_contact', 'fair_mindedness', 
+                      'positive_attitude', 'communication', 'total_score')
+        }),
+        ('Feedback', {
+            'fields': ('comments',)
+        }),
+        ('Submission', {
+            'fields': ('is_submitted', 'submitted_by', 'submitted_at')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+@admin.register(Attendance)
+class AttendanceAdmin(admin.ModelAdmin):
+    list_display = ['player', 'date', 'is_present', 'match', 'marked_by', 'marked_at']
+    list_filter = ['tournament', 'date', 'is_present']
+    search_fields = ['player__full_name', 'player__team__name']
+    readonly_fields = ['marked_at']
+
+@admin.register(TournamentAnnouncement)
+class TournamentAnnouncementAdmin(admin.ModelAdmin):
+    list_display = ['tournament', 'title', 'is_urgent', 'created_by', 'created_at']
+    list_filter = ['tournament', 'is_urgent', 'created_at']
+    search_fields = ['title', 'message']
+    readonly_fields = ['created_at']
+
+@admin.register(VisitorRegistration)
+class VisitorRegistrationAdmin(admin.ModelAdmin):
+    list_display = ['full_name', 'tournament', 'organization', 'purpose', 'registered_at']
+    list_filter = ['tournament', 'purpose', 'registered_at']
+    search_fields = ['full_name', 'email', 'organization']
+    readonly_fields = ['registered_at']
 
 @admin.register(Schedule)
 class ScheduleAdmin(admin.ModelAdmin):

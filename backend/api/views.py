@@ -7,8 +7,17 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.models import Token
-from .models import Profile, Workout, Exercise, PostureAnalysis, FitnessLog, Tournament, TournamentRegistration, Schedule
-from .serializers import ProfileSerializer,WorkoutSerializer,ExerciseSerializer,PostureAnalysisSerializer
+from .models import (
+    Profile, Workout, Exercise, PostureAnalysis, FitnessLog, Schedule,
+    Tournament, Team, Player, Match, Field, SpiritScore, Attendance, 
+    TournamentAnnouncement, VisitorRegistration
+)
+from .serializers import (
+    ProfileSerializer, WorkoutSerializer, ExerciseSerializer, PostureAnalysisSerializer,
+    TournamentSerializer, TournamentListSerializer, TeamSerializer, PlayerSerializer,
+    MatchSerializer, FieldSerializer, SpiritScoreSerializer, AttendanceSerializer,
+    TournamentAnnouncementSerializer, VisitorRegistrationSerializer
+)
 from django.db.models import Count # For stats
 from datetime import date, timedelta, datetime
 import json
@@ -774,57 +783,279 @@ class GoogleFitSyncView(APIView):
         return Response(data, status=status.HTTP_200_OK)
 
 
-class TournamentListView(APIView):
-    """GET /api/tournaments/ - List all tournaments"""
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        tournaments = Tournament.objects.filter(status='upcoming').order_by('start_date')
-        
-        data = []
-        for tournament in tournaments:
-            is_registered = TournamentRegistration.objects.filter(
-                tournament=tournament,
-                user=request.user
-            ).exists()
-            
-            data.append({
-                'id': tournament.id,
-                'name': tournament.name,
-                'description': tournament.description,
-                'location': tournament.location,
-                'start_date': tournament.start_date,
-                'end_date': tournament.end_date,
-                'status': tournament.status,
-                'registration_deadline': tournament.registration_deadline,
-                'is_registered': is_registered
-            })
-        
-        return Response(data, status=status.HTTP_200_OK)
+# OLD TOURNAMENT VIEWS - REPLACED BY NEW TOURNAMENT MANAGEMENT SYSTEM BELOW
+# class TournamentListView(APIView):
+#     """GET /api/tournaments/ - List all tournaments"""
+#     permission_classes = [IsAuthenticated]
+#     def get(self, request):
+#         tournaments = Tournament.objects.filter(status='upcoming').order_by('start_date')
+#         data = []
+#         for tournament in tournaments:
+#             data.append({
+#                 'id': tournament.id,
+#                 'name': tournament.name,
+#                 'description': tournament.description,
+#                 'location': tournament.location,
+#                 'start_date': tournament.start_date,
+#                 'end_date': tournament.end_date,
+#                 'status': tournament.status,
+#             })
+#         return Response(data, status=status.HTTP_200_OK)
 
 
-class TournamentRegisterView(APIView):
-    """POST /api/tournaments/<id>/register/ - Register for tournament"""
+# ===============================================
+# TOURNAMENT MANAGEMENT SYSTEM - NEW VIEWS
+# ===============================================
+
+class TournamentViewSet(viewsets.ModelViewSet):
+    """
+    Tournament CRUD operations with role-based permissions
+    
+    GET /api/tournaments/ - List all tournaments
+    POST /api/tournaments/ - Create tournament (Tournament Director only)
+    GET /api/tournaments/{id}/ - Get tournament details
+    PUT/PATCH /api/tournaments/{id}/ - Update tournament (Tournament Director only)
+    DELETE /api/tournaments/{id}/ - Delete tournament (Tournament Director only)
+    """
+    queryset = Tournament.objects.all()
     permission_classes = [IsAuthenticated]
     
-    def post(self, request, tournament_id):
-        try:
-            tournament = Tournament.objects.get(id=tournament_id)
-        except Tournament.DoesNotExist:
-            return Response({"message": "Tournament not found"}, status=status.HTTP_404_NOT_FOUND)
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return TournamentListSerializer
+        return TournamentSerializer
+    
+    def get_queryset(self):
+        queryset = Tournament.objects.all()
+        # Filter by status if provided
+        status_param = self.request.query_params.get('status', None)
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        return queryset.order_by('-start_date')
+    
+    def perform_create(self, serializer):
+        # Set the tournament director to the current user
+        serializer.save(tournament_director=self.request.user)
+    
+    @action(detail=True, methods=['get'])
+    def leaderboard(self, request, pk=None):
+        """GET /api/tournaments/{id}/leaderboard/ - Get tournament leaderboard"""
+        tournament = self.get_object()
+        teams = tournament.teams.filter(status='approved').order_by('-wins', '-average_spirit_score')
+        serializer = TeamSerializer(teams, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def spirit_rankings(self, request, pk=None):
+        """GET /api/tournaments/{id}/spirit_rankings/ - Get spirit score rankings"""
+        tournament = self.get_object()
+        teams = tournament.teams.filter(status='approved').order_by('-average_spirit_score')
+        serializer = TeamSerializer(teams, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def schedule(self, request, pk=None):
+        """GET /api/tournaments/{id}/schedule/ - Get tournament schedule"""
+        tournament = self.get_object()
+        matches = tournament.matches.all().order_by('match_date', 'start_time')
+        serializer = MatchSerializer(matches, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+class TeamViewSet(viewsets.ModelViewSet):
+    """
+    Team management operations
+    
+    GET /api/teams/ - List teams
+    POST /api/teams/ - Register a team
+    GET /api/teams/{id}/ - Get team details
+    PUT/PATCH /api/teams/{id}/ - Update team (Captain/Manager only)
+    DELETE /api/teams/{id}/ - Delete team
+    """
+    queryset = Team.objects.all()
+    serializer_class = TeamSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = Team.objects.all()
+        # Filter by tournament if provided
+        tournament_id = self.request.query_params.get('tournament', None)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        return queryset
+    
+    def perform_create(self, serializer):
+        # Set the captain to the current user
+        serializer.save(captain=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """POST /api/teams/{id}/approve/ - Approve team registration (Tournament Director only)"""
+        team = self.get_object()
+        team.status = 'approved'
+        team.save()
+        return Response({'status': 'Team approved'})
+    
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """POST /api/teams/{id}/reject/ - Reject team registration (Tournament Director only)"""
+        team = self.get_object()
+        team.status = 'rejected'
+        team.save()
+        return Response({'status': 'Team rejected'})
+
+
+class PlayerViewSet(viewsets.ModelViewSet):
+    """
+    Player management operations
+    
+    GET /api/players/ - List players
+    POST /api/players/ - Add a player to a team
+    GET /api/players/{id}/ - Get player details
+    PUT/PATCH /api/players/{id}/ - Update player
+    DELETE /api/players/{id}/ - Remove player
+    """
+    queryset = Player.objects.all()
+    serializer_class = PlayerSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = Player.objects.all()
+        # Filter by team if provided
+        team_id = self.request.query_params.get('team', None)
+        if team_id:
+            queryset = queryset.filter(team_id=team_id)
+        # Filter by tournament if provided
+        tournament_id = self.request.query_params.get('tournament', None)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        return queryset
+
+
+class MatchViewSet(viewsets.ModelViewSet):
+    """
+    Match management operations
+    
+    GET /api/matches/ - List matches
+    POST /api/matches/ - Create a match (Tournament Director only)
+    GET /api/matches/{id}/ - Get match details
+    PUT/PATCH /api/matches/{id}/ - Update match score/status
+    DELETE /api/matches/{id}/ - Delete match
+    """
+    queryset = Match.objects.all()
+    serializer_class = MatchSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = Match.objects.all()
+        # Filter by tournament if provided
+        tournament_id = self.request.query_params.get('tournament', None)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        # Filter by date if provided
+        date_param = self.request.query_params.get('date', None)
+        if date_param:
+            queryset = queryset.filter(match_date=date_param)
+        return queryset.order_by('match_date', 'start_time')
+    
+    @action(detail=True, methods=['post'])
+    def update_score(self, request, pk=None):
+        """POST /api/matches/{id}/update_score/ - Update match score"""
+        match = self.get_object()
+        team_a_score = request.data.get('team_a_score')
+        team_b_score = request.data.get('team_b_score')
         
-        # Check if already registered
-        if TournamentRegistration.objects.filter(tournament=tournament, user=request.user).exists():
-            return Response({"message": "Already registered for this tournament"}, status=status.HTTP_400_BAD_REQUEST)
+        if team_a_score is not None:
+            match.team_a_score = team_a_score
+        if team_b_score is not None:
+            match.team_b_score = team_b_score
         
-        # Register
-        TournamentRegistration.objects.create(
-            tournament=tournament,
-            user=request.user,
-            team_name=request.data.get('team_name', '')
-        )
+        match.status = 'in_progress'
+        match.save()
         
-        return Response({"message": "Successfully registered for tournament"}, status=status.HTTP_201_CREATED)
+        serializer = self.get_serializer(match)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """POST /api/matches/{id}/complete/ - Mark match as completed"""
+        match = self.get_object()
+        match.status = 'completed'
+        match.save()
+        
+        # Update team stats
+        winner = match.get_winner()
+        if winner:
+            if winner == match.team_a:
+                match.team_a.wins += 1
+                match.team_b.losses += 1
+            else:
+                match.team_b.wins += 1
+                match.team_a.losses += 1
+        else:
+            match.team_a.draws += 1
+            match.team_b.draws += 1
+        
+        match.team_a.points_for += match.team_a_score
+        match.team_a.points_against += match.team_b_score
+        match.team_b.points_for += match.team_b_score
+        match.team_b.points_against += match.team_a_score
+        
+        match.team_a.save()
+        match.team_b.save()
+        
+        serializer = self.get_serializer(match)
+        return Response(serializer.data)
+
+
+class SpiritScoreViewSet(viewsets.ModelViewSet):
+    """
+    Spirit Score operations
+    
+    GET /api/spirit-scores/ - List spirit scores
+    POST /api/spirit-scores/ - Submit a spirit score
+    GET /api/spirit-scores/{id}/ - Get spirit score details
+    PUT/PATCH /api/spirit-scores/{id}/ - Update spirit score
+    """
+    queryset = SpiritScore.objects.all()
+    serializer_class = SpiritScoreSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = SpiritScore.objects.all()
+        # Filter by match if provided
+        match_id = self.request.query_params.get('match', None)
+        if match_id:
+            queryset = queryset.filter(match_id=match_id)
+        # Filter by team if provided
+        team_id = self.request.query_params.get('team', None)
+        if team_id:
+            queryset = queryset.filter(receiving_team_id=team_id)
+        return queryset
+    
+    def perform_create(self, serializer):
+        serializer.save(submitted_by=self.request.user, submitted_at=datetime.now())
+    
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        """POST /api/spirit-scores/{id}/submit/ - Submit spirit score"""
+        spirit_score = self.get_object()
+        spirit_score.is_submitted = True
+        spirit_score.submitted_at = datetime.now()
+        spirit_score.submitted_by = request.user
+        spirit_score.save()
+        
+        serializer = self.get_serializer(spirit_score)
+        return Response(serializer.data)
+
+
+# OLD TOURNAMENT REGISTER VIEW - NOW HANDLED BY TeamViewSet
+# class TournamentRegisterView(APIView):
+#     """POST /api/tournaments/<id>/register/ - Register for tournament"""
+#     permission_classes = [IsAuthenticated]
+#     def post(self, request, tournament_id):
+#         # Use TeamViewSet instead - POST /api/teams/
+#         pass
 
 
 class StudentScheduleView(APIView):
