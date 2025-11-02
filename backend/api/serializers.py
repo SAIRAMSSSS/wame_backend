@@ -12,11 +12,11 @@ class UserSerializer(serializers.ModelSerializer):
 # --- Profile Serializer ---
 class ProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
-    
+
     class Meta:
         model = Profile
-        fields = ('id', 'user', 'bio', 'profile_picture')
-        
+        fields = ('id', 'user', 'bio', 'profile_picture', 'phone_number', 'role')
+
     def create(self, validated_data):
         # We handle User creation separately, so this serializer focuses on Profile updates
         raise serializers.ValidationError("Use the default User endpoint for user creation.")

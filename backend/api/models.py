@@ -6,9 +6,17 @@ from django.dispatch import receiver
 # --- Profile Model ---
 class Profile(models.Model):
     """Extends the default Django User model."""
+    ROLE_CHOICES = [
+        ('student', 'Student'),
+        ('coach', 'Coach'),
+        ('volunteer', 'Volunteer'),
+    ]
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     bio = models.TextField(blank=True, null=True)
-    
+    phone_number = models.CharField(max_length=15, blank=True, null=True)  # For phone number input
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='student')  # Role for login
+
     # Supabase Storage field configuration (requires django-storages setup)
     profile_picture = models.ImageField(upload_to='profiles/avatars/', blank=True, null=True)
 

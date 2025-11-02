@@ -7,6 +7,10 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import Profile,Workout,Exercise,PostureAnalysis
 from .serializers import ProfileSerializer,WorkoutSerializer,ExerciseSerializer,PostureAnalysisSerializer
 from django.db.models import Count # For stats
+from django.contrib.auth import authenticate, login
+from django.conf import settings
+from twilio.rest import Client
+import random
 import json
 
 
@@ -157,6 +161,84 @@ class AnalyzeImageView(APIView):
         return Response({"status": "Analysis successful", "result": analysis_result}, status=status.HTTP_201_CREATED)
 
 
+# --- Phone Login View ---
+class PhoneLoginView(APIView):
+    """POST /api/auth/send_otp/ - Send OTP to phone number"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        phone_number = request.data.get('phone_number')
+        role = request.data.get('role')  # student, coach, volunteer
+
+        if not phone_number or not role:
+            return Response({"error": "Phone number and role are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role not in ['student', 'coach', 'volunteer']:
+            return Response({"error": "Invalid role."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if profile exists with this phone and role
+        try:
+            profile = Profile.objects.get(phone_number=phone_number, role=role)
+            user = profile.user
+        except Profile.DoesNotExist:
+            return Response({"error": "No user found with this phone number and role."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Generate OTP
+        otp = str(random.randint(100000, 999999))
+
+        # Store OTP in session or cache (for simplicity, using session)
+        request.session['otp'] = otp
+        request.session['phone_number'] = phone_number
+        request.session['role'] = role
+
+        # Send OTP via Twilio
+        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        try:
+            message = client.messages.create(
+                body=f"Your OTP for login is: {otp}",
+                from_=settings.TWILIO_PHONE_NUMBER,
+                to=phone_number
+            )
+        except Exception as e:
+            return Response({"error": "Failed to send OTP."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({"message": "OTP sent successfully."}, status=status.HTTP_200_OK)
+
+
+class VerifyOTPView(APIView):
+    """POST /api/auth/verify_otp/ - Verify OTP and login"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        otp = request.data.get('otp')
+
+        if not otp:
+            return Response({"error": "OTP is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check OTP
+        if otp != request.session.get('otp'):
+            return Response({"error": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+
+        phone_number = request.session.get('phone_number')
+        role = request.session.get('role')
+
+        try:
+            profile = Profile.objects.get(phone_number=phone_number, role=role)
+            user = profile.user
+        except Profile.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Login user
+        login(request, user)
+
+        # Clear session
+        del request.session['otp']
+        del request.session['phone_number']
+        del request.session['role']
+
+        return Response({"message": "Login successful.", "user_id": user.id, "role": role}, status=status.HTTP_200_OK)
+
+
 # --- Recommendation Engine ---
 class RecommendationView(APIView):
     """GET /api/recommendations/ - List recommendations & POST /api/recommendations/generate/ - Generate"""
@@ -166,7 +248,7 @@ class RecommendationView(APIView):
         # Placeholder: Retrieve last 5 generated recommendations
         recommendations = ["Try HIIT for cardio.", "Focus on core strength.", "Increase weight for squats."]
         return Response({"recommendations": recommendations}, status=status.HTTP_200_OK)
-    
+
     def post(self, request, format=None):
         # Placeholder: Logic to generate AI recommendations based on user history
         # You'd query user's workouts, stats, and run your AI/ML logic here.

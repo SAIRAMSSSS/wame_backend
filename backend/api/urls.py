@@ -32,4 +32,8 @@ urlpatterns = [
     path('recommendations/', views.RecommendationView.as_view(), name='list_recommendations'),
     # The /recommendations/generate/ endpoint will map to the POST method
     path('recommendations/generate/', views.RecommendationView.as_view(), name='generate_recommendations'),
+
+    # Phone Login Endpoints
+    path('auth/send_otp/', views.PhoneLoginView.as_view(), name='send_otp'),
+    path('auth/verify_otp/', views.VerifyOTPView.as_view(), name='verify_otp'),
 ]
