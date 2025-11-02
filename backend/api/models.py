@@ -129,7 +129,7 @@ class Tournament(models.Model):
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     )
-    
+
     name = models.CharField(max_length=255)
     description = models.TextField()
     location = models.CharField(max_length=255)
@@ -138,13 +138,14 @@ class Tournament(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='upcoming')
     registration_deadline = models.DateField()
     max_participants = models.IntegerField(default=100)
-    
+    notification_sent = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         ordering = ['-start_date']
-    
+
     def __str__(self):
         return self.name
 

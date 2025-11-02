@@ -927,5 +927,71 @@ class AllStudentsFitnessView(APIView):
                 'today': today_data,
                 'weekly': weekly_data
             })
-        
+
         return Response(data, status=status.HTTP_200_OK)
+
+
+# --- DONATION INTEGRATION ---
+class DonateView(APIView):
+    """POST /api/donate/ - Create Razorpay donation order"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        import razorpay
+        import json
+
+        amount = request.data.get('amount', 100)  # Default ₹100
+        currency = request.data.get('currency', 'INR')
+
+        # Initialize Razorpay client
+        client = razorpay.Client(
+            auth=(os.environ.get('RAZORPAY_KEY_ID'), os.environ.get('RAZORPAY_KEY_SECRET'))
+        )
+
+        # Create order
+        order_data = {
+            'amount': amount * 100,  # Amount in paisa
+            'currency': currency,
+            'payment_capture': 1
+        }
+
+        try:
+            order = client.order.create(data=order_data)
+            return Response({
+                'order_id': order['id'],
+                'amount': order['amount'],
+                'currency': order['currency'],
+                'key': os.environ.get('RAZORPAY_KEY_ID')
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# --- WHATSAPP NOTIFICATION UTILITY ---
+def send_whatsapp_message(to_number, message):
+    """Send WhatsApp message using Twilio"""
+    try:
+        from twilio.rest import Client
+
+        account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+        auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
+        whatsapp_number = os.environ.get('TWILIO_WHATSAPP_NUMBER')
+
+        if not all([account_sid, auth_token, whatsapp_number]):
+            print("Twilio credentials not configured")
+            return False
+
+        client = Client(account_sid, auth_token)
+
+        message = client.messages.create(
+            from_=f'whatsapp:{whatsapp_number}',
+            body=message,
+            to=f'whatsapp:{to_number}'
+        )
+
+        print(f"WhatsApp message sent: {message.sid}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to send WhatsApp message: {e}")
+        return False

@@ -5,3 +5,9 @@ django-pwa==2.0.1
 psycopg2-binary==2.9.11
 python-dotenv==1.2.1
 Pillow==12.0.0
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.126.0
+requests==2.31.0
+twilio==9.3.2
+razorpay==1.4.2
