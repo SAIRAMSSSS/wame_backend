@@ -8,10 +8,43 @@ from .models import (
 
 @admin.register(Profile)
 class ProfileAdmin(admin.ModelAdmin):
-    list_display = ['user', 'user_type', 'google_email', 'google_id', 'total_points']
-    list_filter = ['user_type']
-    search_fields = ['user__username', 'user__email', 'google_email']
-    readonly_fields = ['google_id', 'google_access_token', 'google_refresh_token', 'google_token_expiry']
+    list_display = ['get_full_name', 'get_email', 'user_type', 'team_name', 'team_role', 'coach_name', 'profile_completed', 'total_points']
+    list_filter = ['user_type', 'profile_completed', 'team_role']
+    search_fields = ['user__username', 'user__email', 'user__first_name', 'user__last_name', 'google_email', 'coach_name', 'team_name']
+    readonly_fields = ['google_id', 'google_access_token', 'google_refresh_token', 'google_token_expiry', 'profile_completed']
+    
+    def get_full_name(self, obj):
+        """Display user's full name"""
+        if obj.user.first_name or obj.user.last_name:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip()
+        return obj.user.username
+    get_full_name.short_description = 'Name'
+    get_full_name.admin_order_field = 'user__first_name'
+    
+    def get_email(self, obj):
+        """Display user's email"""
+        return obj.user.email or obj.google_email or 'No email'
+    get_email.short_description = 'Email'
+    get_email.admin_order_field = 'user__email'
+    
+    fieldsets = (
+        ('User Information', {
+            'fields': ('user', 'user_type', 'bio', 'profile_picture')
+        }),
+        ('Contact Details', {
+            'fields': ('phone', 'age', 'school', 'address')
+        }),
+        ('Team Information', {
+            'fields': ('coach_name', 'team_name', 'team_role', 'profile_completed')
+        }),
+        ('Fitness Tracking', {
+            'fields': ('total_points',)
+        }),
+        ('Google OAuth', {
+            'fields': ('google_id', 'google_email', 'google_access_token', 'google_refresh_token', 'google_token_expiry'),
+            'classes': ('collapse',)
+        }),
+    )
 
 @admin.register(FitnessLog)
 class FitnessLogAdmin(admin.ModelAdmin):

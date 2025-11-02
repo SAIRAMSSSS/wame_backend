@@ -21,6 +21,14 @@ class Profile(models.Model):
     school = models.CharField(max_length=255, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     
+    # Team and Coach Information (for students)
+    coach_name = models.CharField(max_length=255, blank=True, null=True)
+    team_name = models.CharField(max_length=255, blank=True, null=True)
+    team_role = models.CharField(max_length=100, blank=True, null=True)  # e.g., Handler, Cutter, Defense
+    
+    # Profile completion tracking
+    profile_completed = models.BooleanField(default=False)
+    
     # Fitness tracking
     total_points = models.IntegerField(default=0)
     
