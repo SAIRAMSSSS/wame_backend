@@ -11,6 +11,7 @@ from .models import Profile,Workout,Exercise,PostureAnalysis
 from .serializers import ProfileSerializer,WorkoutSerializer,ExerciseSerializer,PostureAnalysisSerializer
 from django.db.models import Count # For stats
 import json
+import os
 
 
 class HealthCheckView(APIView):
@@ -991,7 +992,7 @@ class GoogleOAuthCallbackView(APIView):
             if profile.user_type == 'coach':
                 redirect_url = f"http://localhost:3000/coach/dashboard?token={token.key}&google_connected=true&first_time={'true' if created else 'false'}"
             else:
-                redirect_url = f"http://localhost:3000/student/home?token={token.key}&google_connected=true&first_time={'true' if created else 'false'}"
+                redirect_url = f"http://localhost:3000/student/dashboard?token={token.key}&google_connected=true&first_time={'true' if created else 'false'}"
             
             return redirect(redirect_url)
             
@@ -1178,3 +1179,38 @@ class GoogleFitDataView(APIView):
             'avg_calories_per_day': round(total_calories / days_count, 2) if days_count > 0 else 0,
             'avg_distance_per_day': round(total_distance / days_count, 2) if days_count > 0 else 0
         }
+
+
+# --- DONATION INTEGRATION ---
+class DonateView(APIView):
+    """POST /api/donate/ - Create Razorpay donation order"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        import razorpay
+
+        amount = request.data.get('amount', 100)  # Default ₹100
+        currency = request.data.get('currency', 'INR')
+
+        # Initialize Razorpay client
+        client = razorpay.Client(
+            auth=(os.environ.get('RAZORPAY_KEY_ID'), os.environ.get('RAZORPAY_KEY_SECRET'))
+        )
+
+        # Create order
+        order_data = {
+            'amount': amount * 100,  # Amount in paisa
+            'currency': currency,
+            'payment_capture': 1
+        }
+
+        try:
+            order = client.order.create(data=order_data)
+            return Response({
+                'order_id': order['id'],
+                'amount': order['amount'],
+                'currency': order['currency'],
+                'key': os.environ.get('RAZORPAY_KEY_ID')
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

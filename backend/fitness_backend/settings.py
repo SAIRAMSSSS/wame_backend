@@ -86,8 +86,19 @@ WSGI_APPLICATION = 'fitness_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# Postgres configuration using environment variables
-if os.environ.get('DATABASE_URL'):
+# Use SQLite for development (offline mode)
+# Switch to PostgreSQL when you have internet connection
+USE_SQLITE = os.environ.get('USE_SQLITE', 'True') == 'True'
+
+if USE_SQLITE:
+    # SQLite database - works offline
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+elif os.environ.get('DATABASE_URL'):
     import dj_database_url
     DATABASES = {
         'default': dj_database_url.config(default=os.environ.get('DATABASE_URL'))

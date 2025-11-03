@@ -57,4 +57,7 @@ urlpatterns = [
     path('recommendations/', views.RecommendationView.as_view(), name='list_recommendations'),
     # The /recommendations/generate/ endpoint will map to the POST method
     path('recommendations/generate/', views.RecommendationView.as_view(), name='generate_recommendations'),
+    
+    # Donation Endpoint
+    path('donate/', views.DonateView.as_view(), name='donate'),
 ]

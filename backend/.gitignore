@@ -48,3 +48,53 @@ build/
 dist/
 *.egg-info/
 .eggs/
+==========================================
+Django & Python Gitignore
+==========================================
+# Python bytecode
+pycache/
+*.py[cod]
+*$py.class
+
+# Django specific
+*.log
+db.sqlite3
+media/
+staticfiles/
+local_settings.py
+
+
+# Environment
+.env
+.env.local
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Migrations cache
+/migrations/pycache/
+
+# Pytest / Coverage (Add if you use these tools)
+htmlcov/
+.coverage
+.tox/
+.cache
+.pytest_cache/
+
+# Build / Distribution
+build/
+dist/
+*.egg-info/
+.eggs/

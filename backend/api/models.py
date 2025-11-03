@@ -47,6 +47,10 @@ class Profile(models.Model):
     google_email = models.EmailField(blank=True, null=True)
     google_access_token = models.TextField(blank=True, null=True)
     google_refresh_token = models.TextField(blank=True, null=True)
+    google_token_expiry = models.DateTimeField(blank=True, null=True)
+    
+    # Gamification field
+    total_points = models.IntegerField(default=0)
 
     def __str__(self):
         return f"{self.user.username} ({self.user_type})"
