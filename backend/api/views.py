@@ -1,39 +1,17 @@
-from django.shortcuts import render, get_object_or_404, redirect
-from django.contrib.auth.models import User
-from django.contrib.auth import authenticate
+from django.shortcuts import render,get_object_or_404
 from rest_framework.views import APIView
-from rest_framework import viewsets, mixins, status, serializers
+from rest_framework import viewsets, mixins, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.models import Token
-from .models import Profile, Workout, Exercise, PostureAnalysis, FitnessLog, Tournament, TournamentRegistration, Schedule
+from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
+from .models import Profile,Workout,Exercise,PostureAnalysis
 from .serializers import ProfileSerializer,WorkoutSerializer,ExerciseSerializer,PostureAnalysisSerializer
 from django.db.models import Count # For stats
-from datetime import date, timedelta, datetime
 import json
 import os
-import random
-
-# Google OAuth imports
-try:
-    from google.oauth2.credentials import Credentials
-except ImportError:
-    # Fallback stub so editors/linters don't show unresolved import when
-    # google-auth is not installed in the environment.
-    # Install the real package for production: pip install google-auth google-auth-oauthlib google-api-python-client
-    class Credentials:
-        def __init__(self, token=None, refresh_token=None, token_uri=None,
-                     client_id=None, client_secret=None, scopes=None, **kwargs):
-            self.token = token
-            self.refresh_token = refresh_token
-            self.token_uri = token_uri
-            self.client_id = client_id
-            self.client_secret = client_secret
-            self.scopes = scopes or []
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 
 
 class HealthCheckView(APIView):
@@ -41,427 +19,6 @@ class HealthCheckView(APIView):
     permission_classes = [AllowAny]
     def get(self,request):
         return Response({"status": "API is running"}, status=status.HTTP_200_OK)
-
-
-# --- AUTHENTICATION VIEWS ---
-class RegisterView(APIView):
-    """POST /api/auth/register/ - Register new user"""
-    permission_classes = [AllowAny]
-    
-    def post(self, request):
-        data = request.data
-        
-        # Validate required fields
-        required_fields = ['email', 'password', 'first_name', 'last_name']
-        for field in required_fields:
-            if field not in data:
-                return Response({"message": f"{field} is required"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check if user already exists
-        if User.objects.filter(email=data['email']).exists():
-            return Response({"message": "User with this email already exists"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Create user
-        user = User.objects.create_user(
-            username=data['email'],
-
-            email=data['email'],
-            password=data['password'],
-            first_name=data['first_name'],
-            last_name=data['last_name']
-        )
-        
-        # Update profile with additional information
-        profile = user.profile
-        profile.user_type = data.get('user_type', 'student')
-        profile.phone = data.get('phone', '')
-        profile.age = data.get('age')
-        profile.school = data.get('school', '')
-        profile.address = data.get('address', '')
-        profile.save()
-        
-        # Create auth token
-        token, created = Token.objects.get_or_create(user=user)
-        
-        return Response({
-            "message": "User registered successfully",
-            "token": token.key,
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "user_type": profile.user_type
-            }
-        }, status=status.HTTP_201_CREATED)
-
-
-class LoginView(APIView):
-    """POST /api/auth/login/ - Login user"""
-    permission_classes = [AllowAny]
-    
-    def post(self, request):
-        email = request.data.get('email')
-        password = request.data.get('password')
-        
-        if not email or not password:
-            return Response({"message": "Email and password are required"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Authenticate user
-        try:
-            user = User.objects.get(email=email)
-            user = authenticate(username=user.username, password=password)
-        except User.DoesNotExist:
-            user = None
-        
-        if user is None:
-            return Response({"message": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
-        
-        # Get or create token
-        token, created = Token.objects.get_or_create(user=user)
-        
-        return Response({
-            "message": "Login successful",
-            "token": token.key,
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "user_type": user.profile.user_type
-            }
-        }, status=status.HTTP_200_OK)
-
-
-class LogoutView(APIView):
-    """POST /api/auth/logout/ - Logout user"""
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request):
-        # Delete the user's token
-        request.user.auth_token.delete()
-        return Response({"message": "Logout successful"}, status=status.HTTP_200_OK)
-
-
-# --- GOOGLE OAUTH VIEWS ---
-class GoogleLoginView(APIView):
-    """GET /api/auth/google/ - Initiate Google OAuth flow"""
-    permission_classes = [AllowAny]
-    
-    def get(self, request):
-        # Google OAuth configuration from environment variables
-        client_id = os.environ.get('GOOGLE_CLIENT_ID', 'YOUR_GOOGLE_CLIENT_ID')
-        client_secret = os.environ.get('GOOGLE_CLIENT_SECRET', 'YOUR_GOOGLE_CLIENT_SECRET')
-        redirect_uri = os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:8000/api/auth/google/callback/')
-        
-        # For development, we'll create the OAuth URL manually
-        # In production, use google_auth_oauthlib.flow.Flow
-        
-        scopes = [
-            'https://www.googleapis.com/auth/userinfo.email',
-            'https://www.googleapis.com/auth/userinfo.profile',
-            'https://www.googleapis.com/auth/fitness.activity.read',
-            'https://www.googleapis.com/auth/fitness.body.read',
-            'https://www.googleapis.com/auth/fitness.location.read'
-        ]
-        
-        # Build authorization URL
-        auth_url = (
-            f"https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={client_id}&"
-            f"redirect_uri={redirect_uri}&"
-            f"response_type=code&"
-            f"scope={' '.join(scopes)}&"
-            f"access_type=offline&"
-            f"prompt=consent"
-        )
-        
-        return Response({'auth_url': auth_url}, status=status.HTTP_200_OK)
-
-
-class GoogleCallbackView(APIView):
-    """GET /api/auth/google/callback/ - Handle Google OAuth callback"""
-    permission_classes = [AllowAny]
-    
-    def get(self, request):
-        code = request.GET.get('code')
-        error = request.GET.get('error')
-        
-        if error:
-            return redirect(f'http://localhost:3000/student/login?error={error}')
-        
-        if not code:
-            return redirect('http://localhost:3000/student/login?error=no_code')
-        
-        try:
-            # Exchange authorization code for tokens
-            import requests
-            
-            token_url = 'https://oauth2.googleapis.com/token'
-            data = {
-                'code': code,
-                'client_id': os.environ.get('GOOGLE_CLIENT_ID'),
-                'client_secret': os.environ.get('GOOGLE_CLIENT_SECRET'),
-                'redirect_uri': os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:8000/api/auth/google/callback/'),
-                'grant_type': 'authorization_code'
-            }
-            
-            token_response = requests.post(token_url, data=data)
-            
-            if token_response.status_code != 200:
-                print(f"Token exchange failed: {token_response.text}")
-                return redirect(f'http://localhost:3000/student/login?error=token_exchange_failed')
-            
-            token_data = token_response.json()
-            access_token = token_data.get('access_token')
-            refresh_token = token_data.get('refresh_token')
-            expires_in = token_data.get('expires_in', 3600)
-            
-            # Get user info from Google
-            userinfo_url = 'https://www.googleapis.com/oauth2/v2/userinfo'
-            headers = {'Authorization': f'Bearer {access_token}'}
-            userinfo_response = requests.get(userinfo_url, headers=headers)
-            
-            if userinfo_response.status_code != 200:
-                print(f"Userinfo failed: {userinfo_response.text}")
-                return redirect(f'http://localhost:3000/student/login?error=userinfo_failed')
-            
-            user_info = userinfo_response.json()
-            
-            google_id = user_info.get('id')
-            email = user_info.get('email')
-            first_name = user_info.get('given_name', '')
-            last_name = user_info.get('family_name', '')
-            picture_url = user_info.get('picture', '')  # Google profile picture
-            
-            # Check if user exists with this Google ID
-            try:
-                profile = Profile.objects.get(google_id=google_id)
-                user = profile.user
-                created = False
-                print(f"Existing user logged in: {email}")
-            except Profile.DoesNotExist:
-                # Check if user exists with this email
-                try:
-                    user = User.objects.get(email=email)
-                    profile = user.profile
-                    created = False
-                    print(f"Existing user (by email) logged in: {email}")
-                except User.DoesNotExist:
-                    # Create new user
-                    user = User.objects.create_user(
-                        username=email,
-                        email=email,
-                        first_name=first_name,
-                        last_name=last_name
-                    )
-                    profile = user.profile
-                    profile.user_type = 'student'
-                    created = True
-                    print(f"New user created: {email} (ID: {user.id})")
-            
-            # Update profile with Google OAuth data
-            from django.utils import timezone
-            profile.google_id = google_id
-            profile.google_email = email
-            profile.google_access_token = access_token
-            profile.google_refresh_token = refresh_token
-            profile.google_token_expiry = timezone.now() + timedelta(seconds=expires_in)
-            
-            # Store user's full name if not already set
-            if not user.first_name and first_name:
-                user.first_name = first_name
-            if not user.last_name and last_name:
-                user.last_name = last_name
-            user.save()
-            
-            profile.save()
-            
-            # Log the stored data for verification
-            print(f"✅ User data stored in database:")
-            print(f"  - User ID: {user.id}")
-            print(f"  - Username: {user.username}")
-            print(f"  - Email: {user.email}")
-            print(f"  - Name: {user.first_name} {user.last_name}")
-            print(f"  - Profile ID: {profile.id}")
-            print(f"  - Google ID: {profile.google_id}")
-            print(f"  - User Type: {profile.user_type}")
-            print(f"  - Account Created: {'Yes (new)' if created else 'No (existing)'}")
-            
-            # Create auth token
-            token, _ = Token.objects.get_or_create(user=user)
-            
-            # Fetch Google Fit data automatically
-            try:
-                self.sync_google_fit_data(user, access_token)
-            except Exception as e:
-                print(f"Google Fit sync error: {e}")
-            
-            # Redirect to dashboard with token
-            redirect_url = f'http://localhost:3000/student/home?token={token.key}&google_connected=true&first_time={created}'
-            return redirect(redirect_url)
-            
-        except Exception as e:
-            print(f"Google OAuth error: {e}")
-            return redirect(f'http://localhost:3000/student/login?error=oauth_failed')
-    
-    def sync_google_fit_data(self, user, access_token):
-        """Fetch and save Google Fit data for the user"""
-        try:
-            # Build Fitness API service
-            credentials = Credentials(token=access_token)
-            fitness_service = build('fitness', 'v1', credentials=credentials)
-            
-            from datetime import datetime as dt
-            today = date.today()
-            today_dt = dt.combine(today, dt.min.time())
-            start_dt = today_dt - timedelta(days=7)
-            start_time = int(start_dt.timestamp() * 1000000000)
-            end_time = int(today_dt.timestamp() * 1000000000)
-            
-            # Fetch steps data
-            try:
-                steps_dataset = fitness_service.users().dataset().aggregate(
-                    userId='me',
-                    body={
-                        'aggregateBy': [{
-                            'dataTypeName': 'com.google.step_count.delta',
-                            'dataSourceId': 'derived:com.google.step_count.delta:com.google.android.gms:estimated_steps'
-                        }],
-                        'bucketByTime': {'durationMillis': 86400000},  # 1 day
-                        'startTimeMillis': start_time // 1000000,
-                        'endTimeMillis': end_time // 1000000
-                    }
-                ).execute()
-                
-                # Parse and save fitness data
-                for bucket in steps_dataset.get('bucket', []):
-                    timestamp = int(bucket['startTimeMillis']) // 1000
-                    log_date = date.fromtimestamp(timestamp)
-
-                    steps = 0
-                    for dataset in bucket.get('dataset', []):
-                        for point in dataset.get('point', []):
-                            steps += point['value'][0]['intVal']
-
-                    # Create or update fitness log
-                    FitnessLog.objects.update_or_create(
-                        user=user,
-                        date=log_date,
-                        defaults={
-                            'steps': steps,
-                            'calories_burned': int(steps * 0.04),  # Rough estimate
-                            'active_minutes': int(steps / 100),  # Rough estimate
-                            'distance_km': round(steps * 0.0008, 2)  # Rough estimate
-                        }
-                    )
-            except HttpError as e:
-                print(f"Google Fit API error: {e}")
-                # If Google Fit fails, generate mock data
-                self.generate_mock_data(user)
-                return  # Exit after generating mock data
-        except Exception as e:
-            print(f"Google Fit sync error: {e}")
-            # Fallback to mock data only if not already handled
-            self.generate_mock_data(user)
-    
-    def generate_mock_data(self, user):
-        """Generate mock fitness data if Google Fit is not available"""
-        from django.db import IntegrityError
-        print(f"📊 Generating mock fitness data for {user.username}...")
-        today = date.today()
-        fitness_logs_created = 0
-        
-        for i in range(7):
-            log_date = today - timedelta(days=i)
-            try:
-                fitness_log, created = FitnessLog.objects.update_or_create(
-                    user=user,
-                    date=log_date,
-                    defaults={
-                        'calories_burned': random.randint(300, 600),
-                        'steps': random.randint(5000, 10000),
-                        'active_minutes': random.randint(30, 90),
-                        'distance_km': round(random.uniform(3.0, 8.0), 2)
-                    }
-                )
-                if created:
-                    fitness_logs_created += 1
-            except IntegrityError:
-                # If there's a race condition, just skip this entry
-                print(f"Skipping duplicate entry for {user.username} on {log_date}")
-                continue
-        
-        print(f"✅ Fitness data stored: {fitness_logs_created} new logs created for {user.username}")
-        total_logs = FitnessLog.objects.filter(user=user).count()
-        print(f"📈 Total fitness logs in database for {user.username}: {total_logs}")
-
-
-# --- DATABASE STATS VIEW ---
-class DatabaseStatsView(APIView):
-    """View to check what data is stored in the database"""
-    permission_classes = [AllowAny]  # Remove this in production
-    
-    def get(self, request):
-        try:
-            # Count all records
-            total_users = User.objects.count()
-            total_profiles = Profile.objects.count()
-            total_fitness_logs = FitnessLog.objects.count()
-            google_oauth_users = Profile.objects.filter(google_id__isnull=False).count()
-            
-            # Get recent users
-            recent_users = []
-            for user in User.objects.all().order_by('-id')[:10]:
-                profile = user.profile
-                fitness_count = FitnessLog.objects.filter(user=user).count()
-                recent_users.append({
-                    'id': user.id,
-                    'username': user.username,
-                    'email': user.email,
-                    'name': f"{user.first_name} {user.last_name}".strip(),
-                    'user_type': profile.user_type,
-                    'google_id': profile.google_id,
-                    'is_google_oauth': bool(profile.google_id),
-                    'fitness_logs_count': fitness_count,
-                    'date_joined': user.date_joined.strftime('%Y-%m-%d %H:%M:%S')
-                })
-            
-            # Get fitness data summary
-            fitness_summary = []
-            for user in User.objects.all()[:10]:
-                logs = FitnessLog.objects.filter(user=user).order_by('-date')[:7]
-                if logs:
-                    fitness_summary.append({
-                        'username': user.username,
-                        'total_logs': logs.count(),
-                        'latest_log': {
-                            'date': logs[0].date.strftime('%Y-%m-%d'),
-                            'steps': logs[0].steps,
-                            'calories': logs[0].calories_burned,
-                            'active_minutes': logs[0].active_minutes
-                        }
-                    })
-            
-            return Response({
-                'status': 'success',
-                'message': 'Database connection active',
-                'statistics': {
-                    'total_users': total_users,
-                    'total_profiles': total_profiles,
-                    'google_oauth_users': google_oauth_users,
-                    'manual_registration_users': total_users - google_oauth_users,
-                    'total_fitness_logs': total_fitness_logs
-                },
-                'recent_users': recent_users,
-                'fitness_data_summary': fitness_summary
-            })
-            
-        except Exception as e:
-            return Response({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
     
     # --- User Profiles ---
 class ProfileViewSet(viewsets.ModelViewSet):
@@ -482,70 +39,82 @@ class ProfileViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(profile)
         return Response(serializer.data)
     
-    # Custom Endpoint: PUT/PATCH /api/profiles/update-profile/
-    @action(detail=False, methods=['put', 'patch'], url_path='update-profile')
-    def update_profile(self, request):
-        """Update the profile of the currently authenticated user."""
-        profile = get_object_or_404(Profile, user=request.user)
-        serializer = self.get_serializer(profile, data=request.data, partial=True)
-        
-        if serializer.is_valid():
-            serializer.save()
-            return Response({
-                "message": "Profile updated successfully",
-                "profile": serializer.data,
-                "profile_completed": serializer.data.get('profile_completed', False)
-            }, status=status.HTTP_200_OK)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
     # Custom Endpoint: GET /api/profiles/check-completion/
     @action(detail=False, methods=['get'], url_path='check-completion')
     def check_completion(self, request):
-        """Check if the user's profile is complete."""
+        """Check if user profile is completed"""
+        profile = get_object_or_404(Profile, user=request.user)
+        return Response({
+            'profile_completed': profile.profile_completed,
+            'user_type': profile.user_type,
+            'role': profile.role
+        })
+    
+    # Custom Endpoint: PATCH /api/profiles/update-profile/
+    @action(detail=False, methods=['patch'], url_path='update-profile')
+    def update_profile(self, request):
+        """Update the current user's profile"""
         profile = get_object_or_404(Profile, user=request.user)
         
-        missing_fields = []
-        if not request.user.first_name:
-            missing_fields.append('first_name')
-        if not request.user.email:
-            missing_fields.append('email')
-        if not profile.coach_name:
-            missing_fields.append('coach_name')
-        if not profile.team_name:
-            missing_fields.append('team_name')
-        if not profile.team_role:
-            missing_fields.append('team_role')
+        # Update profile fields
+        for field, value in request.data.items():
+            if hasattr(profile, field):
+                setattr(profile, field, value)
         
+        # Update user fields (first_name, last_name, email)
+        user = request.user
+        if 'first_name' in request.data:
+            user.first_name = request.data['first_name']
+        if 'last_name' in request.data:
+            user.last_name = request.data['last_name']
+        if 'email' in request.data:
+            user.email = request.data['email']
+        
+        user.save()
+        
+        # Check if profile is complete (all required fields filled)
+        required_fields_filled = all([
+            user.first_name,
+            user.email,
+            profile.coach_name,
+            profile.team_name,
+            profile.team_role
+        ])
+        
+        # Update profile_completed status
+        profile.profile_completed = required_fields_filled
+        profile.save()
+        
+        # Pass request context to serializer for building absolute URLs
+        serializer = self.get_serializer(profile, context={'request': request})
         return Response({
-            "profile_completed": profile.profile_completed,
-            "missing_fields": missing_fields,
-            "message": "Please complete your profile to access all features." if missing_fields else "Profile is complete!"
-        }, status=status.HTTP_200_OK)
+            'message': 'Profile updated successfully',
+            'profile': serializer.data
+        })
     
     # Custom Endpoint: POST /api/profiles/upload-picture/
     @action(detail=False, methods=['post'], url_path='upload-picture')
     def upload_picture(self, request):
-        """Upload profile picture for the current user."""
+        """Upload profile picture"""
         profile = get_object_or_404(Profile, user=request.user)
         
         if 'profile_picture' not in request.FILES:
             return Response({
-                "error": "No profile picture provided"
+                'error': 'No picture file provided'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Delete old profile picture if exists
-        if profile.profile_picture:
-            profile.profile_picture.delete(save=False)
         
         profile.profile_picture = request.FILES['profile_picture']
         profile.save()
         
-        serializer = self.get_serializer(profile, context={'request': request})
+        # Build absolute URL for profile picture
+        picture_url = None
+        if profile.profile_picture:
+            picture_url = request.build_absolute_uri(profile.profile_picture.url)
+        
         return Response({
-            "message": "Profile picture uploaded successfully",
-            "profile_picture_url": serializer.data.get('profile_picture_url')
-        }, status=status.HTTP_200_OK)
+            'message': 'Profile picture uploaded successfully',
+            'profile_picture_url': picture_url
+        })
 
     def perform_create(self, serializer):
         # Automatically set the user for the profile (this should typically be done on User creation)
@@ -686,145 +255,478 @@ class RecommendationView(APIView):
         return Response({"status": "Generation successful", "new_recommendation": new_recommendation}, status=status.HTTP_201_CREATED)
 
 
-# --- STUDENT DASHBOARD VIEWS ---
+# --- Authentication Views ---
+class RegisterView(APIView):
+    """POST /api/auth/register/ - User registration"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        try:
+            username = request.data.get('username')  # Added username field
+            email = request.data.get('email')
+            password = request.data.get('password')
+            first_name = request.data.get('first_name', '')
+            last_name = request.data.get('last_name', '')
+            phone = request.data.get('phone', '')
+            school = request.data.get('school', '')
+            user_type = request.data.get('user_type', 'student')  # coach or student
+            
+            # Validation
+            if not email or not password:
+                return Response(
+                    {'message': 'Email and password are required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # If username not provided, use email as username (backward compatibility)
+            if not username:
+                username = email
+            
+            # Check if user already exists (by email or username)
+            if User.objects.filter(email=email).exists():
+                return Response(
+                    {'message': 'User with this email already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if User.objects.filter(username=username).exists():
+                return Response(
+                    {'message': 'User with this username already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create user
+            user = User.objects.create_user(
+                username=username,  # Use provided username or email
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name
+            )
+            
+            # Create or update profile
+            profile, created = Profile.objects.get_or_create(user=user)
+            profile.phone = phone
+            profile.school = school
+            profile.user_type = user_type
+            if user_type == 'coach':
+                profile.role = 'team_manager'
+            profile.save()
+            
+            # Generate token
+            token, _ = Token.objects.get_or_create(user=user)
+            
+            return Response({
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'user_type': user_type
+                }
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response(
+                {'message': f'Registration failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class LoginView(APIView):
+    """POST /api/auth/login/ - User login"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        try:
+            # Accept both 'username' and 'email' fields
+            username_or_email = request.data.get('username') or request.data.get('email')
+            password = request.data.get('password')
+            
+            if not username_or_email or not password:
+                return Response(
+                    {'error': 'Username/Email and password are required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Try to authenticate with username first
+            user = authenticate(username=username_or_email, password=password)
+            
+            # If authentication failed, try to find user by email and authenticate
+            if user is None:
+                try:
+                    user_obj = User.objects.get(email=username_or_email)
+                    user = authenticate(username=user_obj.username, password=password)
+                except User.DoesNotExist:
+                    pass
+            
+            if user is None:
+                return Response(
+                    {'error': 'Invalid username/email or password'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Get or create token
+            token, _ = Token.objects.get_or_create(user=user)
+            
+            # Get profile
+            profile = Profile.objects.filter(user=user).first()
+            
+            return Response({
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'user_type': profile.user_type if profile else 'student',
+                    'role': profile.role if profile else None
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {'message': f'Login failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# =============================================================================
+# TOURNAMENT MANAGEMENT VIEWS
+# =============================================================================
+
+from .models import (
+    Tournament, Team, Player, Match, Field, SpiritScore,
+    Attendance, TournamentAnnouncement, VisitorRegistration
+)
+from .serializers import (
+    TournamentSerializer, TeamSerializer, PlayerSerializer, MatchSerializer,
+    FieldSerializer, SpiritScoreSerializer, AttendanceSerializer,
+    TournamentAnnouncementSerializer, VisitorRegistrationSerializer
+)
+from django.db.models import Q, Count, Avg, F, Min, Max
+
+
+# --- Tournament ViewSet ---
+class TournamentViewSet(viewsets.ModelViewSet):
+    """CRUD for Tournaments with custom actions"""
+    serializer_class = TournamentSerializer
+    permission_classes = [AllowAny]  # Public access to view tournaments
+    queryset = Tournament.objects.all()
+    
+    def get_queryset(self):
+        queryset = Tournament.objects.all()
+        status = self.request.query_params.get('status', None)
+        if status:
+            queryset = queryset.filter(status=status)
+        return queryset.order_by('-start_date')
+    
+    @action(detail=True, methods=['get'])
+    def leaderboard(self, request, pk=None):
+        """Get tournament leaderboard (team standings)"""
+        tournament = self.get_object()
+        teams = tournament.teams.filter(status='approved').order_by(
+            '-wins', '-spirit_score_average', 'losses'
+        )
+        serializer = TeamSerializer(teams, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def spirit_rankings(self, request, pk=None):
+        """Get spirit score rankings for tournament"""
+        tournament = self.get_object()
+        teams = tournament.teams.filter(status='approved').order_by(
+            '-spirit_score_average', '-wins'
+        )
+        serializer = TeamSerializer(teams, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def schedule(self, request, pk=None):
+        """Get match schedule for tournament"""
+        tournament = self.get_object()
+        matches = tournament.matches.all().order_by('match_date', 'start_time')
+        serializer = MatchSerializer(matches, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def stats(self, request, pk=None):
+        """Get tournament statistics"""
+        tournament = self.get_object()
+        
+        players = Player.objects.filter(tournament=tournament)
+        teams = Team.objects.filter(tournament=tournament, status='approved')
+        matches = Match.objects.filter(tournament=tournament)
+        
+        stats = {
+            'total_teams': teams.count(),
+            'total_players': players.count(),
+            'total_matches': matches.count(),
+            'completed_matches': matches.filter(status='completed').count(),
+            'average_spirit_score': teams.aggregate(avg=Avg('spirit_score_average'))['avg'] or 0,
+            'gender_distribution': {
+                'male': players.filter(gender='male').count(),
+                'female': players.filter(gender='female').count(),
+                'non_binary': players.filter(gender='non_binary').count(),
+            },
+            'age_stats': {
+                'youngest': players.aggregate(min=Min('age'))['min'],
+                'oldest': players.aggregate(max=Max('age'))['max'],
+                'average': players.aggregate(avg=Avg('age'))['avg'],
+            }
+        }
+        
+        return Response(stats)
+
+
+# --- Team ViewSet ---
+class TeamViewSet(viewsets.ModelViewSet):
+    """CRUD for Teams"""
+    serializer_class = TeamSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = Team.objects.all()
+        tournament_id = self.request.query_params.get('tournament', None)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        return queryset.order_by('-wins', '-spirit_score_average')
+    
+    @action(detail=True, methods=['get'])
+    def roster(self, request, pk=None):
+        """Get team roster (players)"""
+        team = self.get_object()
+        players = team.players.all().order_by('jersey_number')
+        serializer = PlayerSerializer(players, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def matches(self, request, pk=None):
+        """Get all matches for this team"""
+        team = self.get_object()
+        matches = Match.objects.filter(
+            Q(team_a=team) | Q(team_b=team)
+        ).order_by('match_date', 'start_time')
+        serializer = MatchSerializer(matches, many=True)
+        return Response(serializer.data)
+
+
+# --- Player ViewSet ---
+class PlayerViewSet(viewsets.ModelViewSet):
+    """CRUD for Players"""
+    serializer_class = PlayerSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = Player.objects.all()
+        team_id = self.request.query_params.get('team', None)
+        tournament_id = self.request.query_params.get('tournament', None)
+        
+        if team_id:
+            queryset = queryset.filter(team_id=team_id)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+            
+        return queryset.order_by('team__name', 'jersey_number')
+
+
+# --- Match ViewSet ---
+class MatchViewSet(viewsets.ModelViewSet):
+    """CRUD for Matches with live scoring"""
+    serializer_class = MatchSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = Match.objects.all()
+        tournament_id = self.request.query_params.get('tournament', None)
+        status = self.request.query_params.get('status', None)
+        
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        if status:
+            queryset = queryset.filter(status=status)
+            
+        return queryset.order_by('match_date', 'start_time')
+    
+    @action(detail=True, methods=['post'])
+    def update_score(self, request, pk=None):
+        """Update match score (for live scoring)"""
+        match = self.get_object()
+        team_a_score = request.data.get('team_a_score')
+        team_b_score = request.data.get('team_b_score')
+        
+        if team_a_score is not None:
+            match.team_a_score = team_a_score
+        if team_b_score is not None:
+            match.team_b_score = team_b_score
+            
+        match.save()
+        serializer = self.get_serializer(match)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """Mark match as completed and update team stats"""
+        match = self.get_object()
+        match.status = 'completed'
+        match.save()
+        
+        # Update team stats
+        if match.team_a_score > match.team_b_score:
+            match.team_a.wins += 1
+            match.team_b.losses += 1
+        elif match.team_b_score > match.team_a_score:
+            match.team_b.wins += 1
+            match.team_a.losses += 1
+        else:
+            match.team_a.draws += 1
+            match.team_b.draws += 1
+        
+        match.team_a.points_for += match.team_a_score
+        match.team_a.points_against += match.team_b_score
+        match.team_b.points_for += match.team_b_score
+        match.team_b.points_against += match.team_a_score
+        
+        match.team_a.save()
+        match.team_b.save()
+        
+        serializer = self.get_serializer(match)
+        return Response(serializer.data)
+
+
+# --- Spirit Score ViewSet ---
+class SpiritScoreViewSet(viewsets.ModelViewSet):
+    """CRUD for Spirit Scores"""
+    serializer_class = SpiritScoreSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = SpiritScore.objects.all()
+        match_id = self.request.query_params.get('match', None)
+        team_id = self.request.query_params.get('team', None)
+        
+        if match_id:
+            queryset = queryset.filter(match_id=match_id)
+        if team_id:
+            queryset = queryset.filter(Q(scoring_team_id=team_id) | Q(receiving_team_id=team_id))
+            
+        return queryset.order_by('-created_at')
+    
+    def perform_create(self, serializer):
+        """Auto-calculate total score and mark as submitted"""
+        serializer.save(is_submitted=True, submitted_by=self.request.user if self.request.user.is_authenticated else None)
+
+
+# --- Field ViewSet ---
+class FieldViewSet(viewsets.ModelViewSet):
+    """CRUD for Fields"""
+    serializer_class = FieldSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = Field.objects.all()
+        tournament_id = self.request.query_params.get('tournament', None)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        return queryset
+
+
+# --- Attendance ViewSet ---
+class AttendanceViewSet(viewsets.ModelViewSet):
+    """CRUD for Attendance"""
+    serializer_class = AttendanceSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = Attendance.objects.all()
+        tournament_id = self.request.query_params.get('tournament', None)
+        match_id = self.request.query_params.get('match', None)
+        player_id = self.request.query_params.get('player', None)
+        
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        if match_id:
+            queryset = queryset.filter(match_id=match_id)
+        if player_id:
+            queryset = queryset.filter(player_id=player_id)
+            
+        return queryset.order_by('-date')
+
+
+# --- Tournament Announcement ViewSet ---
+class TournamentAnnouncementViewSet(viewsets.ModelViewSet):
+    """CRUD for Tournament Announcements"""
+    serializer_class = TournamentAnnouncementSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = TournamentAnnouncement.objects.all()
+        tournament_id = self.request.query_params.get('tournament', None)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        return queryset.order_by('-created_at')
+
+
+# --- Visitor Registration ViewSet ---
+class VisitorRegistrationViewSet(viewsets.ModelViewSet):
+    """CRUD for Visitor Registration"""
+    serializer_class = VisitorRegistrationSerializer
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = VisitorRegistration.objects.all()
+        tournament_id = self.request.query_params.get('tournament', None)
+        if tournament_id:
+            queryset = queryset.filter(tournament_id=tournament_id)
+        return queryset.order_by('-registered_at')
+
+
+# --- Additional Helper Views for Student Dashboard ---
+class ProfileCheckCompletionView(APIView):
+    """GET /api/profiles/check-completion/ - Check if profile is complete"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        profile = Profile.objects.filter(user=request.user).first()
+        if not profile:
+            return Response({'profile_completed': False})
+        
+        return Response({
+            'profile_completed': profile.profile_completed,
+            'user_type': profile.user_type,
+            'role': profile.role
+        })
+
+
 class StudentFitnessView(APIView):
     """GET /api/student/fitness/ - Get student fitness data"""
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        # Get last 7 days of fitness data
-        today = date.today()
-        last_7_days = [(today - timedelta(days=i)) for i in range(6, -1, -1)]
-        
-        fitness_logs = FitnessLog.objects.filter(
-            user=request.user,
-            date__in=last_7_days
-        ).order_by('date')
-        
-        # Format data for chart
-        data = {
-            'dates': [log.date.strftime('%a') for log in fitness_logs],
-            'calories': [log.calories_burned for log in fitness_logs],
-            'steps': [log.steps for log in fitness_logs],
-            'active_minutes': [log.active_minutes for log in fitness_logs],
-            'today': {
-                'calories': fitness_logs.last().calories_burned if fitness_logs.exists() else 0,
-                'steps': fitness_logs.last().steps if fitness_logs.exists() else 0,
-                'active_minutes': fitness_logs.last().active_minutes if fitness_logs.exists() else 0
-            }
-        }
-        
-        return Response(data, status=status.HTTP_200_OK)
-
-
-class GoogleFitSyncView(APIView):
-    """POST /api/student/fitness/sync-google-fit/ - Sync Google Fit data"""
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request):
-        """
-        Sync fitness data from Google Fit API
-        
-        To use this endpoint:
-        1. Get Google OAuth credentials from Google Cloud Console
-        2. Install google-auth and google-api-python-client: pip install google-auth google-api-python-client
-        3. Store user's Google access token in Profile model
-        4. This endpoint will fetch last 7 days of data from Google Fit
-        """
-        
-        # MOCK DATA for now - Replace with actual Google Fit API call
-        today = date.today()
-        
-        # Simulate fetching data from Google Fit for last 7 days
+        # Mock fitness data - replace with actual Google Fit integration
+        from datetime import datetime, timedelta
         import random
-        for i in range(7):
-            log_date = today - timedelta(days=i)
-            
-            # Create or update fitness log with Google Fit data
-            fitness_log, created = FitnessLog.objects.update_or_create(
-                user=request.user,
-                date=log_date,
-                defaults={
-                    'calories_burned': random.randint(300, 600),
-                    'steps': random.randint(5000, 10000),
-                    'active_minutes': random.randint(30, 90),
-                    'distance_km': round(random.uniform(3.0, 8.0), 2)
-                }
-            )
         
-        # Return updated fitness data
-        last_7_days = [(today - timedelta(days=i)) for i in range(6, -1, -1)]
-        fitness_logs = FitnessLog.objects.filter(
-            user=request.user,
-            date__in=last_7_days
-        ).order_by('date')
+        today = datetime.now()
+        dates = [(today - timedelta(days=i)).strftime('%m/%d') for i in range(6, -1, -1)]
         
-        data = {
-            'dates': [log.date.strftime('%a') for log in fitness_logs],
-            'calories': [log.calories_burned for log in fitness_logs],
-            'steps': [log.steps for log in fitness_logs],
-            'active_minutes': [log.active_minutes for log in fitness_logs],
+        # Generate mock data
+        calories = [random.randint(1000, 2000) for _ in range(7)]
+        steps = [random.randint(3000, 10000) for _ in range(7)]
+        active_minutes = [random.randint(20, 120) for _ in range(7)]
+        
+        return Response({
             'today': {
-                'calories': fitness_logs.last().calories_burned if fitness_logs.exists() else 0,
-                'steps': fitness_logs.last().steps if fitness_logs.exists() else 0,
-                'active_minutes': fitness_logs.last().active_minutes if fitness_logs.exists() else 0
-            }
-        }
-        
-        return Response(data, status=status.HTTP_200_OK)
-
-
-class TournamentListView(APIView):
-    """GET /api/tournaments/ - List all tournaments"""
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        tournaments = Tournament.objects.filter(status='upcoming').order_by('start_date')
-        
-        data = []
-        for tournament in tournaments:
-            is_registered = TournamentRegistration.objects.filter(
-                tournament=tournament,
-                user=request.user
-            ).exists()
-            
-            data.append({
-                'id': tournament.id,
-                'name': tournament.name,
-                'description': tournament.description,
-                'location': tournament.location,
-                'start_date': tournament.start_date,
-                'end_date': tournament.end_date,
-                'status': tournament.status,
-                'registration_deadline': tournament.registration_deadline,
-                'is_registered': is_registered
-            })
-        
-        return Response(data, status=status.HTTP_200_OK)
-
-
-class TournamentRegisterView(APIView):
-    """POST /api/tournaments/<id>/register/ - Register for tournament"""
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request, tournament_id):
-        try:
-            tournament = Tournament.objects.get(id=tournament_id)
-        except Tournament.DoesNotExist:
-            return Response({"message": "Tournament not found"}, status=status.HTTP_404_NOT_FOUND)
-        
-        # Check if already registered
-        if TournamentRegistration.objects.filter(tournament=tournament, user=request.user).exists():
-            return Response({"message": "Already registered for this tournament"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Register
-        TournamentRegistration.objects.create(
-            tournament=tournament,
-            user=request.user,
-            team_name=request.data.get('team_name', '')
-        )
-        
-        return Response({"message": "Successfully registered for tournament"}, status=status.HTTP_201_CREATED)
+                'calories': calories[-1],
+                'steps': steps[-1],
+                'active_minutes': active_minutes[-1]
+            },
+            'calories': calories,
+            'steps': steps,
+            'active_minutes': active_minutes,
+            'dates': dates
+        })
 
 
 class StudentScheduleView(APIView):
@@ -832,103 +734,451 @@ class StudentScheduleView(APIView):
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        # Get upcoming schedules where user is a participant
-        schedules = Schedule.objects.filter(
-            participants=request.user,
-            date__gte=date.today()
-        ).order_by('date', 'start_time')[:10]
+        # Return matches for the student's team
+        profile = Profile.objects.filter(user=request.user).first()
+        if not profile or not profile.team_name:
+            return Response([])
         
-        data = [{
-            'id': schedule.id,
-            'title': schedule.title,
-            'description': schedule.description,
-            'event_type': schedule.event_type,
-            'location': schedule.location,
-            'date': schedule.date,
-            'start_time': schedule.start_time,
-            'end_time': schedule.end_time
-        } for schedule in schedules]
+        # Find teams matching the student's team name
+        from .models import Team, Match
+        teams = Team.objects.filter(name__icontains=profile.team_name)
         
-        return Response(data, status=status.HTTP_200_OK)
+        if not teams.exists():
+            return Response([])
+        
+        # Get matches for these teams
+        team_ids = teams.values_list('id', flat=True)
+        matches = Match.objects.filter(
+            Q(team1_id__in=team_ids) | Q(team2_id__in=team_ids)
+        ).order_by('scheduled_time')[:10]
+        
+        schedule_data = []
+        for match in matches:
+            schedule_data.append({
+                'id': match.id,
+                'date': match.scheduled_time.strftime('%Y-%m-%d'),
+                'time': match.scheduled_time.strftime('%H:%M'),
+                'team1': match.team1.name if match.team1 else 'TBD',
+                'team2': match.team2.name if match.team2 else 'TBD',
+                'field': match.field.name if match.field else 'TBD',
+                'status': match.status
+            })
+        
+        return Response(schedule_data)
 
 
 class LeaderboardView(APIView):
-    """GET /api/leaderboard/ - Get leaderboard"""
+    """GET /api/leaderboard/ - Get global leaderboard across all tournaments"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        from .models import Team
+        from django.db.models import Avg
+        
+        # Get all teams sorted by wins
+        teams = Team.objects.annotate(
+            avg_spirit=Avg('received_spirit_scores__total_score')
+        ).order_by('-wins', '-points', '-avg_spirit')[:20]
+        
+        leaderboard_data = []
+        for team in teams:
+            leaderboard_data.append({
+                'id': team.id,
+                'name': team.name,
+                'city': team.home_city,
+                'wins': team.wins,
+                'losses': team.losses,
+                'draws': team.draws,
+                'points': team.points,
+                'points_for': team.points_for,
+                'points_against': team.points_against,
+                'point_differential': team.points_for - team.points_against,
+                'average_spirit_score': float(team.spirit_score_average) if team.spirit_score_average else 0.0,
+                'logo_url': team.logo.url if team.logo else None,
+                'players': [{
+                    'id': p.id,
+                    'name': p.full_name,
+                    'jersey_number': p.jersey_number,
+                    'position': p.position,
+                    'is_active': p.is_active
+                } for p in team.players.all()[:8]]
+            })
+        
+        return Response(leaderboard_data)
+
+
+# ===================== Google OAuth Views =====================
+
+class GoogleOAuthView(APIView):
+    """
+    GET /api/auth/google/ - Initiate Google OAuth flow
+    GET /api/auth/google/callback/ - Handle Google OAuth callback
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """
+        Initiate Google OAuth flow
+        Returns the Google OAuth authorization URL
+        """
+        import os
+        from urllib.parse import urlencode
+        
+        # Google OAuth 2.0 endpoints
+        google_auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+        
+        # Get Google OAuth credentials from environment
+        client_id = os.getenv('GOOGLE_CLIENT_ID', '')
+        redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'http://127.0.0.1:8000/api/auth/google/callback/')
+        
+        # If no credentials, return mock response for development
+        if not client_id:
+            # Return a development mode response
+            return Response({
+                'auth_url': None,
+                'message': 'Google OAuth not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env file.',
+                'dev_mode': True
+            })
+        
+        # OAuth parameters with Google Fit scopes
+        scopes = [
+            'openid',
+            'email',
+            'profile',
+            'https://www.googleapis.com/auth/fitness.activity.read',  # Read activity data
+            'https://www.googleapis.com/auth/fitness.body.read',      # Read body measurements
+            'https://www.googleapis.com/auth/fitness.location.read',  # Read location data
+        ]
+        
+        params = {
+            'client_id': client_id,
+            'redirect_uri': redirect_uri,
+            'response_type': 'code',
+            'scope': ' '.join(scopes),  # Space-separated scopes
+            'access_type': 'offline',  # Get refresh token
+            'prompt': 'consent'  # Always show consent screen
+        }
+        
+        # Build authorization URL
+        auth_url = f"{google_auth_url}?{urlencode(params)}"
+        
+        return Response({
+            'auth_url': auth_url,
+            'dev_mode': False
+        })
+
+
+class GoogleOAuthCallbackView(APIView):
+    """
+    Handle Google OAuth callback
+    Creates or updates user account and returns token
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """Handle OAuth callback from Google"""
+        import os
+        import requests
+        from urllib.parse import urlencode
+        
+        # Get authorization code from query params
+        code = request.GET.get('code')
+        error = request.GET.get('error')
+        
+        if error:
+            return Response({
+                'error': f'Google authentication failed: {error}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not code:
+            return Response({
+                'error': 'No authorization code provided'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get Google OAuth credentials
+        client_id = os.getenv('GOOGLE_CLIENT_ID', '')
+        client_secret = os.getenv('GOOGLE_CLIENT_SECRET', '')
+        redirect_uri = os.getenv('GOOGLE_REDIRECT_URI', 'http://127.0.0.1:8000/api/auth/google/callback/')
+        
+        if not client_id or not client_secret:
+            return Response({
+                'error': 'Google OAuth not configured on server'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        # Exchange code for access token
+        token_url = "https://oauth2.googleapis.com/token"
+        token_data = {
+            'code': code,
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'redirect_uri': redirect_uri,
+            'grant_type': 'authorization_code'
+        }
+        
+        try:
+            # Debug logging
+            print(f"DEBUG: Exchanging code with Google...")
+            print(f"DEBUG: client_id = {client_id[:20]}...")
+            print(f"DEBUG: client_secret = {client_secret[:15]}...")
+            print(f"DEBUG: redirect_uri = {redirect_uri}")
+            
+            token_response = requests.post(token_url, data=token_data)
+            token_json = token_response.json()
+            
+            # Debug logging
+            print(f"DEBUG: Google response status = {token_response.status_code}")
+            print(f"DEBUG: Google response = {token_json}")
+            
+            if 'error' in token_json:
+                return Response({
+                    'error': f"Token exchange failed: {token_json.get('error_description', token_json.get('error', 'Unknown error'))}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            access_token = token_json.get('access_token')
+            refresh_token = token_json.get('refresh_token')  # Save refresh token
+            
+            # Get user info from Google
+            userinfo_url = "https://www.googleapis.com/oauth2/v2/userinfo"
+            headers = {'Authorization': f'Bearer {access_token}'}
+            userinfo_response = requests.get(userinfo_url, headers=headers)
+            user_info = userinfo_response.json()
+            
+            # Extract user data
+            email = user_info.get('email')
+            first_name = user_info.get('given_name', '')
+            last_name = user_info.get('family_name', '')
+            google_id = user_info.get('id')
+            
+            if not email:
+                return Response({
+                    'error': 'Could not retrieve email from Google'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if user exists
+            user, created = User.objects.get_or_create(
+                email=email,
+                defaults={
+                    'username': email,
+                    'first_name': first_name,
+                    'last_name': last_name
+                }
+            )
+            
+            # Create or update profile
+            profile, profile_created = Profile.objects.get_or_create(user=user)
+            
+            # Update profile with Google info
+            profile.google_email = email
+            profile.google_id = google_id
+            profile.google_access_token = access_token
+            profile.google_refresh_token = refresh_token  # Store refresh token for later use
+            
+            # Determine user type from the state or set default
+            # Check if user came from student or coach registration
+            # For now, check the referrer or set based on existing profile
+            if created or not profile.user_type:
+                # Default to student if registering via Google
+                # (Coach registration typically uses manual form)
+                profile.user_type = 'student'
+                profile.role = 'player'
+            
+            profile.save()
+            
+            # Generate or get auth token
+            token, _ = Token.objects.get_or_create(user=user)
+            
+            # Redirect based on user type
+            from django.shortcuts import redirect
+            if profile.user_type == 'coach':
+                redirect_url = f"http://localhost:3000/coach/dashboard?token={token.key}&google_connected=true&first_time={'true' if created else 'false'}"
+            else:
+                redirect_url = f"http://localhost:3000/student/dashboard?token={token.key}&google_connected=true&first_time={'true' if created else 'false'}"
+            
+            return redirect(redirect_url)
+            
+        except requests.RequestException as e:
+            return Response({
+                'error': f'Failed to communicate with Google: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({
+                'error': f'Authentication failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ===================== Google Fit API Views =====================
+
+class GoogleFitDataView(APIView):
+    """
+    GET /api/fitness/google-fit/ - Fetch fitness data from Google Fit
+    """
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        # Get top 10 students by total points
-        top_students = Profile.objects.filter(
-            user_type='student'
-        ).order_by('-total_points')[:20]
+        """Fetch fitness data from Google Fit API"""
+        import os
+        import requests
+        from datetime import datetime, timedelta
         
-        data = [{
-            'rank': idx + 1,
-            'name': f"{profile.user.first_name} {profile.user.last_name}",
-            'points': profile.total_points,
-            'is_current_user': profile.user == request.user
-        } for idx, profile in enumerate(top_students)]
+        # Get user's profile
+        profile = get_object_or_404(Profile, user=request.user)
         
-        return Response(data, status=status.HTTP_200_OK)
-
-
-class AllStudentsFitnessView(APIView):
-    """GET /api/admin/students-fitness/ - Get fitness data for all students (Admin/Coach only)"""
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        # Check if user is admin or coach
-        if request.user.profile.user_type not in ['admin', 'coach']:
-            return Response({"message": "Unauthorized. Admin or Coach access required."}, status=status.HTTP_403_FORBIDDEN)
+        # Check if user has connected Google account
+        if not profile.google_access_token:
+            return Response({
+                'error': 'Google account not connected. Please login with Google first.',
+                'google_connected': False
+            }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get all students with their latest fitness data
-        students = User.objects.filter(profile__user_type='student').select_related('profile')
+        access_token = profile.google_access_token
         
-        data = []
-        today = date.today()
+        # Get date range (last 7 days by default)
+        days = int(request.GET.get('days', 7))
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=days)
         
-        for student in students:
-            # Get today's fitness log
-            try:
-                fitness_log = FitnessLog.objects.get(user=student, date=today)
-                today_data = {
-                    'calories': fitness_log.calories_burned,
-                    'steps': fitness_log.steps,
-                    'active_minutes': fitness_log.active_minutes,
-                    'distance': fitness_log.distance_km
-                }
-            except FitnessLog.DoesNotExist:
-                today_data = {
-                    'calories': 0,
-                    'steps': 0,
-                    'active_minutes': 0,
-                    'distance': 0
-                }
+        # Convert to milliseconds (Google Fit uses milliseconds)
+        start_time_ms = int(start_time.timestamp() * 1000)
+        end_time_ms = int(end_time.timestamp() * 1000)
+        
+        try:
+            # Google Fit API endpoint
+            fit_api_url = "https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate"
             
-            # Get last 7 days of data
-            last_7_days = [(today - timedelta(days=i)) for i in range(6, -1, -1)]
-            fitness_logs = FitnessLog.objects.filter(
-                user=student,
-                date__in=last_7_days
-            ).order_by('date')
-            
-            weekly_data = {
-                'dates': [log.date.strftime('%a') for log in fitness_logs],
-                'calories': [log.calories_burned for log in fitness_logs],
-                'steps': [log.steps for log in fitness_logs]
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
             }
             
-            data.append({
-                'id': student.id,
-                'name': f"{student.first_name} {student.last_name}",
-                'email': student.email,
-                'school': student.profile.school or 'N/A',
-                'total_points': student.profile.total_points,
-                'today': today_data,
-                'weekly': weekly_data
+            # Request body for aggregated data
+            data = {
+                "aggregateBy": [
+                    {
+                        "dataTypeName": "com.google.step_count.delta",
+                        "dataSourceId": "derived:com.google.step_count.delta:com.google.android.gms:estimated_steps"
+                    },
+                    {
+                        "dataTypeName": "com.google.calories.expended",
+                        "dataSourceId": "derived:com.google.calories.expended:com.google.android.gms:merge_calories_expended"
+                    },
+                    {
+                        "dataTypeName": "com.google.distance.delta",
+                        "dataSourceId": "derived:com.google.distance.delta:com.google.android.gms:merge_distance_delta"
+                    },
+                    {
+                        "dataTypeName": "com.google.heart_rate.bpm",
+                        "dataSourceId": "derived:com.google.heart_rate.bpm:com.google.android.gms:merge_heart_rate_bpm"
+                    }
+                ],
+                "bucketByTime": {"durationMillis": 86400000},  # 1 day in milliseconds
+                "startTimeMillis": start_time_ms,
+                "endTimeMillis": end_time_ms
+            }
+            
+            # Make request to Google Fit API
+            response = requests.post(fit_api_url, headers=headers, json=data)
+            
+            if response.status_code == 401:
+                # Token expired, need to re-authenticate
+                return Response({
+                    'error': 'Google access token expired. Please reconnect your Google account.',
+                    'google_connected': False,
+                    'token_expired': True
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            
+            if not response.ok:
+                return Response({
+                    'error': f'Failed to fetch Google Fit data: {response.text}',
+                    'status_code': response.status_code
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            fit_data = response.json()
+            
+            # Process and format the data
+            formatted_data = self.process_fit_data(fit_data)
+            
+            return Response({
+                'google_connected': True,
+                'date_range': {
+                    'start': start_time.isoformat(),
+                    'end': end_time.isoformat(),
+                    'days': days
+                },
+                'fitness_data': formatted_data,
+                'summary': self.calculate_summary(formatted_data)
             })
-
-        return Response(data, status=status.HTTP_200_OK)
+            
+        except requests.RequestException as e:
+            return Response({
+                'error': f'Failed to communicate with Google Fit: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({
+                'error': f'Error fetching fitness data: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def process_fit_data(self, raw_data):
+        """Process raw Google Fit data into readable format"""
+        processed_data = []
+        
+        for bucket in raw_data.get('bucket', []):
+            date_data = {
+                'date': datetime.fromtimestamp(int(bucket['startTimeMillis']) / 1000).strftime('%Y-%m-%d'),
+                'steps': 0,
+                'calories': 0,
+                'distance': 0,
+                'heart_rate': []
+            }
+            
+            for dataset in bucket.get('dataset', []):
+                data_type = dataset.get('dataSourceId', '')
+                
+                for point in dataset.get('point', []):
+                    for value in point.get('value', []):
+                        if 'step_count' in data_type:
+                            date_data['steps'] += int(value.get('intVal', 0))
+                        elif 'calories' in data_type:
+                            date_data['calories'] += round(value.get('fpVal', 0), 2)
+                        elif 'distance' in data_type:
+                            date_data['distance'] += round(value.get('fpVal', 0) / 1000, 2)  # Convert to km
+                        elif 'heart_rate' in data_type:
+                            date_data['heart_rate'].append(round(value.get('fpVal', 0), 1))
+            
+            # Calculate average heart rate
+            if date_data['heart_rate']:
+                date_data['avg_heart_rate'] = round(sum(date_data['heart_rate']) / len(date_data['heart_rate']), 1)
+            else:
+                date_data['avg_heart_rate'] = 0
+            
+            del date_data['heart_rate']  # Remove raw heart rate data
+            processed_data.append(date_data)
+        
+        return processed_data
+    
+    def calculate_summary(self, fitness_data):
+        """Calculate summary statistics"""
+        if not fitness_data:
+            return {
+                'total_steps': 0,
+                'total_calories': 0,
+                'total_distance': 0,
+                'avg_steps_per_day': 0,
+                'avg_calories_per_day': 0
+            }
+        
+        total_steps = sum(day['steps'] for day in fitness_data)
+        total_calories = sum(day['calories'] for day in fitness_data)
+        total_distance = sum(day['distance'] for day in fitness_data)
+        days_count = len(fitness_data)
+        
+        return {
+            'total_steps': total_steps,
+            'total_calories': round(total_calories, 2),
+            'total_distance': round(total_distance, 2),
+            'avg_steps_per_day': round(total_steps / days_count, 0) if days_count > 0 else 0,
+            'avg_calories_per_day': round(total_calories / days_count, 2) if days_count > 0 else 0,
+            'avg_distance_per_day': round(total_distance / days_count, 2) if days_count > 0 else 0
+        }
 
 
 # --- DONATION INTEGRATION ---
@@ -938,7 +1188,6 @@ class DonateView(APIView):
 
     def post(self, request):
         import razorpay
-        import json
 
         amount = request.data.get('amount', 100)  # Default ₹100
         currency = request.data.get('currency', 'INR')
@@ -965,33 +1214,3 @@ class DonateView(APIView):
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
-# --- WHATSAPP NOTIFICATION UTILITY ---
-def send_whatsapp_message(to_number, message):
-    """Send WhatsApp message using Twilio"""
-    try:
-        from twilio.rest import Client
-
-        account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
-        auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
-        whatsapp_number = os.environ.get('TWILIO_WHATSAPP_NUMBER')
-
-        if not all([account_sid, auth_token, whatsapp_number]):
-            print("Twilio credentials not configured")
-            return False
-
-        client = Client(account_sid, auth_token)
-
-        message = client.messages.create(
-            from_=f'whatsapp:{whatsapp_number}',
-            body=message,
-            to=f'whatsapp:{to_number}'
-        )
-
-        print(f"WhatsApp message sent: {message.sid}")
-        return True
-
-    except Exception as e:
-        print(f"Failed to send WhatsApp message: {e}")
-        return False

@@ -4,12 +4,23 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 
-# Create a router to handle ModelViewSet URLs (Profiles, Workouts, Exercises)
+# Create a router to handle ModelViewSet URLs (Profiles, Workouts, Exercises, Tournaments)
 router = DefaultRouter()
 router.register('profiles', views.ProfileViewSet, basename='profile')
 router.register('workouts', views.WorkoutViewSet, basename='workout')
 router.register('exercises', views.ExerciseViewSet, basename='exercise')
 router.register('posture', views.PostureAnalysisViewSet, basename='analysis')
+
+# Tournament Management Routes
+router.register('tournaments', views.TournamentViewSet, basename='tournament')
+router.register('teams', views.TeamViewSet, basename='team')
+router.register('players', views.PlayerViewSet, basename='player')
+router.register('matches', views.MatchViewSet, basename='match')
+router.register('fields', views.FieldViewSet, basename='field')
+router.register('spirit-scores', views.SpiritScoreViewSet, basename='spirit-score')
+router.register('attendance', views.AttendanceViewSet, basename='attendance')
+router.register('announcements', views.TournamentAnnouncementViewSet, basename='announcement')
+router.register('visitors', views.VisitorRegistrationViewSet, basename='visitor')
 
 # The main URL patterns for your 'api' app
 urlpatterns = [
@@ -24,29 +35,16 @@ urlpatterns = [
     # Authentication Endpoints
     path('auth/register/', views.RegisterView.as_view(), name='register'),
     path('auth/login/', views.LoginView.as_view(), name='login'),
-    path('auth/logout/', views.LogoutView.as_view(), name='logout'),
-    
-    # Google OAuth Endpoints
-    path('auth/google/', views.GoogleLoginView.as_view(), name='google_login'),
-    path('auth/google/callback/', views.GoogleCallbackView.as_view(), name='google_callback'),
-    
-    # Database Stats (for verification)
-    path('db/stats/', views.DatabaseStatsView.as_view(), name='db_stats'),
+    path('auth/google/', views.GoogleOAuthView.as_view(), name='google_oauth'),
+    path('auth/google/callback/', views.GoogleOAuthCallbackView.as_view(), name='google_oauth_callback'),
     
     # Student Dashboard Endpoints
     path('student/fitness/', views.StudentFitnessView.as_view(), name='student_fitness'),
-    path('student/fitness/sync-google-fit/', views.GoogleFitSyncView.as_view(), name='sync_google_fit'),
     path('student/schedule/', views.StudentScheduleView.as_view(), name='student_schedule'),
-    
-    # Admin/Coach Endpoints
-    path('admin/students-fitness/', views.AllStudentsFitnessView.as_view(), name='all_students_fitness'),
-    
-    # Tournament Endpoints
-    path('tournaments/', views.TournamentListView.as_view(), name='tournaments'),
-    path('tournaments/<int:tournament_id>/register/', views.TournamentRegisterView.as_view(), name='tournament_register'),
-    
-    # Leaderboard
     path('leaderboard/', views.LeaderboardView.as_view(), name='leaderboard'),
+    
+    # Google Fit Integration
+    path('fitness/google-fit/', views.GoogleFitDataView.as_view(), name='google_fit_data'),
     
     # Posture Analysis Endpoints
     # Note: These views handle the POST requests for file analysis
@@ -59,7 +57,7 @@ urlpatterns = [
     path('recommendations/', views.RecommendationView.as_view(), name='list_recommendations'),
     # The /recommendations/generate/ endpoint will map to the POST method
     path('recommendations/generate/', views.RecommendationView.as_view(), name='generate_recommendations'),
-
+    
     # Donation Endpoint
     path('donate/', views.DonateView.as_view(), name='donate'),
 ]

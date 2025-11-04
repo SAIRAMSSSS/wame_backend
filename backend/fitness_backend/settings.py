@@ -30,18 +30,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-+-j%fovtpmu25nr9g$31*
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get('ALLOWED_HOSTS') else ['*']
-
-
-# CORS Configuration for Next.js frontend
-CORS_ALLOW_ALL_ORIGINS = True  # For development only
-CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:3002",
-    "http://127.0.0.1:3000",
-]
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get('ALLOWED_HOSTS') else []
 
 
 # Application definition
@@ -54,9 +43,9 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # Third-party apps
+    'corsheaders',  # CORS headers
     'rest_framework',  # Django REST Framework
     'rest_framework.authtoken',  # Token authentication
-    'corsheaders',  # Django CORS Headers
     'pwa',# Django PWA
     'api.apps.ApiConfig',
     # Your project apps go here
@@ -64,8 +53,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # CORS middleware - must be before CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',  # CORS middleware (must be before CommonMiddleware)
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -97,26 +86,33 @@ WSGI_APPLICATION = 'fitness_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# Supabase PostgreSQL configuration (or local SQLite for development)
-USE_SUPABASE = os.environ.get('USE_SUPABASE', 'False') == 'True'
+# Use SQLite for development (offline mode)
+# Switch to PostgreSQL when you have internet connection
+USE_SQLITE = os.environ.get('USE_SQLITE', 'True') == 'True'
 
-if USE_SUPABASE:
+if USE_SQLITE:
+    # SQLite database - works offline
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+elif os.environ.get('DATABASE_URL'):
+    import dj_database_url
+    DATABASES = {
+        'default': dj_database_url.config(default=os.environ.get('DATABASE_URL'))
+    }
+else:
+    # Supabase PostgreSQL configuration
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.environ.get('DB_NAME', 'postgres'),
             'USER': os.environ.get('DB_USER', 'postgres'),
             'PASSWORD': os.environ.get('DB_PASSWORD', '12345678'),
-            'HOST': os.environ.get('DB_HOST', 'db.xnhnrsoqbmcursawxjoq.supabase.co'),
+            'HOST': 'db.xnhnrsoqbmcursawxjoq.supabase.co',
             'PORT': os.environ.get('DB_PORT', '5432'),
-        }
-    }
-else:
-    # SQLite for local development
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
     
@@ -166,8 +162,7 @@ STATICFILES_DIRS = [
     BASE_DIR / 'static',
 ]
 
-# Media files (User uploads like profile pictures)
-# https://docs.djangoproject.com/en/5.2/ref/settings/#media-root
+# Media files (User uploaded content)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
@@ -180,10 +175,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # --- Django REST Framework Settings ---
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated', # Require authentication by default
+        'rest_framework.permissions.AllowAny', # A common starting point
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',  # Token auth for API
+        'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.BasicAuthentication'
     ],
@@ -211,3 +206,33 @@ PWA_APP_ICONS = [
 
 # Set the path to your custom service worker
 PWA_SERVICE_WORKER_PATH = BASE_DIR / 'static/js/serviceworker.js'
+
+# --- CORS Settings ---
+# Allow frontend to communicate with backend
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
