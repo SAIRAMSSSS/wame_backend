@@ -7,11 +7,25 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.models import Token
-from .models import Profile, Workout, Exercise, PostureAnalysis, FitnessLog, Tournament, TournamentRegistration, Schedule
-from .serializers import ProfileSerializer,WorkoutSerializer,ExerciseSerializer,PostureAnalysisSerializer
-from django.db.models import Count # For stats
+from .models import (
+    Profile, Workout, Exercise, PostureAnalysis, FitnessLog,
+    Tournament, TournamentRegistration, Schedule,
+    Team, TeamPlayer, Field, Match, SpiritScore, TournamentBracket, Notification,
+    ChildProfile, Session, Attendance, LifeSkillsAssessment, HomeVisit
+)
+from .serializers import (
+    ProfileSerializer, WorkoutSerializer, ExerciseSerializer, PostureAnalysisSerializer,
+    FitnessLogSerializer, TournamentSerializer, TournamentRegistrationSerializer,
+    TeamSerializer, TeamPlayerSerializer, FieldSerializer, MatchSerializer,
+    SpiritScoreSerializer, TournamentBracketSerializer, NotificationSerializer,
+    ChildProfileSerializer, SessionSerializer, AttendanceSerializer,
+    LifeSkillsAssessmentSerializer, HomeVisitSerializer, ScheduleSerializer
+)
+from django.db.models import Count, Q # For stats
+from django.core.exceptions import PermissionDenied
 from datetime import date, timedelta, datetime
 import json
+import logging
 import os
 import random
 
@@ -27,6 +41,16 @@ class HealthCheckView(APIView):
     permission_classes = [AllowAny]
     def get(self,request):
         return Response({"status": "API is running"}, status=status.HTTP_200_OK)
+
+
+class WelcomeView(APIView):
+    """GET /api/welcome/ - Welcome endpoint that logs requests"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        # Log request metadata
+        logger.info(f"Request received: {request.method} {request.path}")
+        return Response({"message": "Welcome to the Fitness and Sports API!"}, status=status.HTTP_200_OK)
 
 
 # --- AUTHENTICATION VIEWS ---
@@ -695,57 +719,7 @@ class GoogleFitSyncView(APIView):
         return Response(data, status=status.HTTP_200_OK)
 
 
-class TournamentListView(APIView):
-    """GET /api/tournaments/ - List all tournaments"""
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        tournaments = Tournament.objects.filter(status='upcoming').order_by('start_date')
-        
-        data = []
-        for tournament in tournaments:
-            is_registered = TournamentRegistration.objects.filter(
-                tournament=tournament,
-                user=request.user
-            ).exists()
-            
-            data.append({
-                'id': tournament.id,
-                'name': tournament.name,
-                'description': tournament.description,
-                'location': tournament.location,
-                'start_date': tournament.start_date,
-                'end_date': tournament.end_date,
-                'status': tournament.status,
-                'registration_deadline': tournament.registration_deadline,
-                'is_registered': is_registered
-            })
-        
-        return Response(data, status=status.HTTP_200_OK)
 
-
-class TournamentRegisterView(APIView):
-    """POST /api/tournaments/<id>/register/ - Register for tournament"""
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request, tournament_id):
-        try:
-            tournament = Tournament.objects.get(id=tournament_id)
-        except Tournament.DoesNotExist:
-            return Response({"message": "Tournament not found"}, status=status.HTTP_404_NOT_FOUND)
-        
-        # Check if already registered
-        if TournamentRegistration.objects.filter(tournament=tournament, user=request.user).exists():
-            return Response({"message": "Already registered for this tournament"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Register
-        TournamentRegistration.objects.create(
-            tournament=tournament,
-            user=request.user,
-            team_name=request.data.get('team_name', '')
-        )
-        
-        return Response({"message": "Successfully registered for tournament"}, status=status.HTTP_201_CREATED)
 
 
 class StudentScheduleView(APIView):
@@ -886,6 +860,558 @@ class DonateView(APIView):
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# --- TOURNAMENT MANAGEMENT VIEWS ---
+class TournamentViewSet(viewsets.ModelViewSet):
+    """CRUD for Tournaments"""
+    queryset = Tournament.objects.all()
+    serializer_class = TournamentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Tournament directors can see all, others see public tournaments
+        if self.request.user.profile.user_type in ['tournament_director', 'admin']:
+            return Tournament.objects.all()
+        return Tournament.objects.filter(status__in=['upcoming', 'ongoing'])
+
+    def perform_create(self, serializer):
+        # Only tournament directors and admins can create tournaments
+        if self.request.user.profile.user_type not in ['tournament_director', 'admin']:
+            raise PermissionDenied("Only tournament directors can create tournaments")
+        serializer.save(director=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def register(self, request, pk=None):
+        """Register for a tournament"""
+        tournament = self.get_object()
+        user = request.user
+
+        # Check if already registered
+        if TournamentRegistration.objects.filter(tournament=tournament, user=user).exists():
+            return Response({"message": "Already registered"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check registration deadline
+        if tournament.registration_deadline < date.today():
+            return Response({"message": "Registration deadline has passed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        TournamentRegistration.objects.create(
+            tournament=tournament,
+            user=user,
+            team_name=request.data.get('team_name', '')
+        )
+
+        return Response({"message": "Successfully registered"}, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Get tournament statistics"""
+        tournaments = self.get_queryset()
+
+        stats = {
+            'total_tournaments': tournaments.count(),
+            'upcoming': tournaments.filter(status='upcoming').count(),
+            'ongoing': tournaments.filter(status='ongoing').count(),
+            'completed': tournaments.filter(status='completed').count(),
+            'total_teams': Team.objects.filter(tournament__in=tournaments).count(),
+            'total_matches': Match.objects.filter(tournament__in=tournaments).count(),
+            'completed_matches': Match.objects.filter(tournament__in=tournaments, status='completed').count()
+        }
+
+        return Response(stats)
+
+    @action(detail=True, methods=['get'])
+    def results(self, request, pk=None):
+        """Get tournament results and standings"""
+        tournament = self.get_object()
+
+        # Get all teams with their stats
+        teams = tournament.teams.filter(approved=True)
+        standings = []
+
+        for team in teams:
+            # Calculate wins, losses, spirit scores
+            matches_as_a = Match.objects.filter(tournament=tournament, team_a=team, status='completed')
+            matches_as_b = Match.objects.filter(tournament=tournament, team_b=team, status='completed')
+
+            wins = matches_as_a.filter(winner=team).count() + matches_as_b.filter(winner=team).count()
+            total_matches = matches_as_a.count() + matches_as_b.count()
+
+            # Calculate average spirit score
+            spirit_scores_received = SpiritScore.objects.filter(
+                match__tournament=tournament,
+                target_team=team
+            ).aggregate(avg_score=models.Avg('total_score'))['avg_score'] or 0
+
+            standings.append({
+                'team_name': team.name,
+                'wins': wins,
+                'losses': total_matches - wins,
+                'spirit_score_avg': round(spirit_scores_received, 2),
+                'total_points': wins * 2  # Simple points system
+            })
+
+        # Sort by points, then spirit score
+        standings.sort(key=lambda x: (x['total_points'], x['spirit_score_avg']), reverse=True)
+
+        return Response({
+            'tournament': tournament.name,
+            'standings': standings
+        })
+
+
+class PlayerRegistrationView(APIView):
+    """POST /api/players/register/ - Register individual player with demographics"""
+    permission_classes = [AllowAny]  # Allow registration without auth, or [IsAuthenticated] if needed
+
+    def post(self, request):
+        data = request.data
+
+        # Validate required fields
+        required_fields = ['email', 'password', 'first_name', 'last_name', 'age', 'gender', 'school']
+        for field in required_fields:
+            if field not in data:
+                return Response({"message": f"{field} is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if user already exists
+        if User.objects.filter(email=data['email']).exists():
+            return Response({"message": "User with this email already exists"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create user
+        user = User.objects.create_user(
+            username=data['email'],
+            email=data['email'],
+            password=data['password'],
+            first_name=data['first_name'],
+            last_name=data['last_name']
+        )
+
+        # Update profile with player demographics
+        profile = user.profile
+        profile.user_type = 'player'
+        profile.age = data['age']
+        profile.gender = data.get('gender')
+        profile.school = data['school']
+        profile.phone = data.get('phone', '')
+        profile.address = data.get('address', '')
+        profile.emergency_contact = data.get('emergency_contact', '')
+        profile.medical_conditions = data.get('medical_conditions', '')
+        profile.jersey_size = data.get('jersey_size', '')
+        profile.save()
+
+        # Create auth token
+        token, created = Token.objects.get_or_create(user=user)
+
+        return Response({
+            "message": "Player registered successfully",
+            "token": token.key,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "user_type": profile.user_type
+            }
+        }, status=status.HTTP_201_CREATED)
+
+
+class TeamViewSet(viewsets.ModelViewSet):
+    """CRUD for Teams"""
+    queryset = Team.objects.all()
+    serializer_class = TeamSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Team managers and captains can see their teams
+        user = self.request.user
+        if user.profile.user_type in ['team_manager', 'admin', 'tournament_director']:
+            return Team.objects.all()
+        return Team.objects.filter(
+            models.Q(captain=user) |
+            models.Q(manager=user) |
+            models.Q(players__user=user)
+        ).distinct()
+
+    def perform_create(self, serializer):
+        # Set captain if not specified
+        if not serializer.validated_data.get('captain'):
+            serializer.save(captain=self.request.user)
+        else:
+            serializer.save()
+
+
+class MatchViewSet(viewsets.ModelViewSet):
+    """CRUD for Matches"""
+    queryset = Match.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Field officials and admins can see all matches
+        if self.request.user.profile.user_type in ['field_official', 'admin', 'tournament_director']:
+            return Match.objects.all()
+        # Players see matches for their teams
+        return Match.objects.filter(
+            models.Q(team_a__players__user=self.request.user) |
+            models.Q(team_b__players__user=self.request.user)
+        ).distinct()
+
+    @action(detail=True, methods=['post'])
+    def update_score(self, request, pk=None):
+        """Update match score (field officials only)"""
+        match = self.get_object()
+        user = request.user
+
+        if user.profile.user_type not in ['field_official', 'admin', 'tournament_director']:
+            raise PermissionDenied("Only field officials can update scores")
+
+        team_a_score = request.data.get('team_a_score')
+        team_b_score = request.data.get('team_b_score')
+
+        if team_a_score is not None:
+            match.team_a_score = team_a_score
+        if team_b_score is not None:
+            match.team_b_score = team_b_score
+
+        # Determine winner
+        if match.team_a_score > match.team_b_score:
+            match.winner = match.team_a
+        elif match.team_b_score > match.team_a_score:
+            match.winner = match.team_b
+
+        match.save()
+        return Response({"message": "Score updated successfully"})
+
+
+class SpiritScoreViewSet(viewsets.ModelViewSet):
+    """CRUD for Spirit Scores"""
+    queryset = SpiritScore.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Users can see spirit scores for matches they're involved in
+        return SpiritScore.objects.filter(
+            models.Q(match__team_a__players__user=self.request.user) |
+            models.Q(match__team_b__players__user=self.request.user) |
+            models.Q(submitting_team__captain=self.request.user) |
+            models.Q(submitting_team__manager=self.request.user)
+        ).distinct()
+
+    def perform_create(self, serializer):
+        # Only team captains/managers can submit spirit scores
+        match = serializer.validated_data['match']
+        submitting_team = serializer.validated_data['submitting_team']
+        user = self.request.user
+
+        # Check if user is captain or manager of submitting team
+        if not (
+            submitting_team.captain == user or
+            submitting_team.manager == user or
+            user.profile.user_type in ['admin', 'tournament_director']
+        ):
+            raise PermissionDenied("Only team captains or managers can submit spirit scores")
+
+        serializer.save(submitted_by=user)
+
+
+# --- CHILD DEVELOPMENT VIEWS ---
+class ChildProfileViewSet(viewsets.ModelViewSet):
+    """CRUD for Child Profiles"""
+    queryset = ChildProfile.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Programme managers and admins can see all children
+        if self.request.user.profile.user_type in ['programme_manager', 'admin']:
+            return ChildProfile.objects.all()
+        # Coaches see children they're assigned to
+        return ChildProfile.objects.filter(programme_manager=self.request.user)
+
+    def perform_create(self, serializer):
+        # Only programme managers and admins can create child profiles
+        if self.request.user.profile.user_type not in ['programme_manager', 'admin']:
+            raise PermissionDenied("Only programme managers can create child profiles")
+        serializer.save()
+
+
+class SessionViewSet(viewsets.ModelViewSet):
+    """CRUD for Sessions"""
+    queryset = Session.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Programme managers see all sessions, coaches see their facilitated sessions
+        user = self.request.user
+        if user.profile.user_type in ['programme_manager', 'admin']:
+            return Session.objects.all()
+        return Session.objects.filter(coach=user)
+
+    def perform_create(self, serializer):
+        # Set programme manager
+        serializer.save(programme_manager=self.request.user)
+
+
+class AttendanceViewSet(viewsets.ModelViewSet):
+    """CRUD for Attendance"""
+    queryset = Attendance.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Coaches and programme managers can see attendance for their sessions
+        user = self.request.user
+        if user.profile.user_type in ['programme_manager', 'admin']:
+            return Attendance.objects.all()
+        return Attendance.objects.filter(
+            models.Q(session__coach=user) |
+            models.Q(session__programme_manager=user)
+        )
+
+    def perform_create(self, serializer):
+        # Only coaches and programme managers can mark attendance
+        session = serializer.validated_data['session']
+        user = self.request.user
+
+        if not (
+            session.coach == user or
+            session.programme_manager == user or
+            user.profile.user_type in ['admin']
+        ):
+            raise PermissionDenied("Only session coaches or programme managers can mark attendance")
+
+        serializer.save(marked_by=user)
+
+
+class LifeSkillsAssessmentViewSet(viewsets.ModelViewSet):
+    """CRUD for Life Skills Assessments"""
+    queryset = LifeSkillsAssessment.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Coaches and programme managers can see assessments for their children
+        user = self.request.user
+        if user.profile.user_type in ['programme_manager', 'admin']:
+            return LifeSkillsAssessment.objects.all()
+        return LifeSkillsAssessment.objects.filter(
+            models.Q(child__programme_manager=user) |
+            models.Q(conductor_by=user)
+        )
+
+    def perform_create(self, serializer):
+        # Only coaches and programme managers can conduct assessments
+        child = serializer.validated_data['child']
+        user = self.request.user
+
+        if not (
+            child.programme_manager == user or
+            user.profile.user_type in ['programme_manager', 'admin']
+        ):
+            raise PermissionDenied("Only programme managers can conduct assessments")
+
+        serializer.save(conductor_by=user)
+
+
+# --- NOTIFICATION VIEWS ---
+class NotificationViewSet(viewsets.ModelViewSet):
+    """CRUD for Notifications"""
+    queryset = Notification.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Users only see their own notifications
+        return Notification.objects.filter(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Mark notification as read"""
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        return Response({"message": "Notification marked as read"})
+
+
+# --- FIELD MANAGEMENT VIEWS ---
+class FieldViewSet(viewsets.ModelViewSet):
+    """CRUD for Fields"""
+    queryset = Field.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Field officials and admins can see all fields
+        if self.request.user.profile.user_type in ['field_official', 'admin', 'tournament_director']:
+            return Field.objects.all()
+        return Field.objects.none()  # Regular users can't see fields
+
+    def perform_create(self, serializer):
+        # Only field officials and admins can create fields
+        if self.request.user.profile.user_type not in ['field_official', 'admin', 'tournament_director']:
+            raise PermissionDenied("Only field officials can create fields")
+        serializer.save()
+
+
+class TournamentBracketViewSet(viewsets.ModelViewSet):
+    """CRUD for Tournament Brackets"""
+    queryset = TournamentBracket.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Tournament directors and admins can see all brackets
+        if self.request.user.profile.user_type in ['tournament_director', 'admin']:
+            return TournamentBracket.objects.all()
+        return TournamentBracket.objects.none()
+
+    def perform_create(self, serializer):
+        # Only tournament directors and admins can create brackets
+        if self.request.user.profile.user_type not in ['tournament_director', 'admin']:
+            raise PermissionDenied("Only tournament directors can create brackets")
+        serializer.save()
+
+    @action(detail=True, methods=['post'])
+    def generate_bracket(self, request, pk=None):
+        """Generate tournament bracket based on tournament type"""
+        bracket = self.get_object()
+        tournament = bracket.tournament
+
+        if tournament.status != 'upcoming':
+            return Response({"message": "Cannot generate bracket for ongoing or completed tournaments"}, status=status.HTTP_400_BAD_REQUEST)
+
+        teams = list(tournament.teams.filter(approved=True))
+        if len(teams) < 2:
+            return Response({"message": "Need at least 2 approved teams to generate bracket"}, status=status.HTTP_400_BAD_REQUEST)
+
+        bracket_data = self._generate_bracket_data(tournament.tournament_type, teams)
+        bracket.bracket_data = bracket_data
+        bracket.save()
+
+        return Response({"message": "Bracket generated successfully", "bracket_data": bracket_data})
+
+    def _generate_bracket_data(self, tournament_type, teams):
+        """Generate bracket data based on tournament type"""
+        import random
+        random.shuffle(teams)  # Randomize team positions
+
+        if tournament_type == 'single_elimination':
+            return self._generate_single_elimination(teams)
+        elif tournament_type == 'double_elimination':
+            return self._generate_double_elimination(teams)
+        elif tournament_type == 'round_robin':
+            return self._generate_round_robin(teams)
+        elif tournament_type == 'pools_playoffs':
+            return self._generate_pools_playoffs(teams)
+        else:
+            return {"error": "Unsupported tournament type"}
+
+    def _generate_single_elimination(self, teams):
+        """Generate single elimination bracket"""
+        rounds = []
+        current_round_teams = teams[:]
+
+        round_num = 1
+        while len(current_round_teams) > 1:
+            round_matches = []
+            for i in range(0, len(current_round_teams), 2):
+                if i + 1 < len(current_round_teams):
+                    match = {
+                        "team_a": current_round_teams[i].name,
+                        "team_b": current_round_teams[i+1].name,
+                        "winner": None
+                    }
+                    round_matches.append(match)
+                else:
+                    # Bye for odd number of teams
+                    match = {
+                        "team_a": current_round_teams[i].name,
+                        "team_b": "BYE",
+                        "winner": current_round_teams[i].name
+                    }
+                    round_matches.append(match)
+
+            rounds.append({"round": round_num, "matches": round_matches})
+            # Simulate winners for next round (in real implementation, this would be empty)
+            current_round_teams = [team for team in current_round_teams if random.choice([True, False])]  # Mock
+            round_num += 1
+
+        return {"type": "single_elimination", "rounds": rounds}
+
+    def _generate_round_robin(self, teams):
+        """Generate round-robin schedule"""
+        matches = []
+        for i in range(len(teams)):
+            for j in range(i+1, len(teams)):
+                matches.append({
+                    "team_a": teams[i].name,
+                    "team_b": teams[j].name,
+                    "round": (i + j) % (len(teams)-1) + 1 if len(teams) > 2 else 1
+                })
+
+        return {"type": "round_robin", "matches": matches}
+
+    def _generate_double_elimination(self, teams):
+        """Generate double elimination bracket (simplified)"""
+        # Simplified implementation - full double elimination is complex
+        winners_bracket = self._generate_single_elimination(teams[:len(teams)//2 + len(teams)%2])
+        losers_bracket = self._generate_single_elimination(teams[len(teams)//2 + len(teams)%2:])
+
+        return {
+            "type": "double_elimination",
+            "winners_bracket": winners_bracket,
+            "losers_bracket": losers_bracket
+        }
+
+    def _generate_pools_playoffs(self, teams):
+        """Generate pools + playoffs format"""
+        # Divide into pools
+        pool_size = 4
+        pools = []
+        for i in range(0, len(teams), pool_size):
+            pools.append(teams[i:i+pool_size])
+
+        pool_data = []
+        for idx, pool in enumerate(pools):
+            pool_data.append({
+                "pool": f"Pool {chr(65+idx)}",  # A, B, C, etc.
+                "teams": [team.name for team in pool],
+                "round_robin_matches": self._generate_round_robin(pool)["matches"]
+            })
+
+        return {"type": "pools_playoffs", "pools": pool_data}
+
+
+class HomeVisitViewSet(viewsets.ModelViewSet):
+    """CRUD for Home Visits"""
+    queryset = HomeVisit.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Programme managers and admins can see all home visits
+        if self.request.user.profile.user_type in ['programme_manager', 'admin']:
+            return HomeVisit.objects.all()
+        return HomeVisit.objects.none()
+
+    def perform_create(self, serializer):
+        # Only programme managers and admins can create home visits
+        if self.request.user.profile.user_type not in ['programme_manager', 'admin']:
+            raise PermissionDenied("Only programme managers can create home visits")
+        serializer.save()
+
+
+class ScheduleViewSet(viewsets.ModelViewSet):
+    """CRUD for Schedules"""
+    queryset = Schedule.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Coaches and programme managers can see schedules for their events
+        user = self.request.user
+        if user.profile.user_type in ['programme_manager', 'admin', 'tournament_director']:
+            return Schedule.objects.all()
+        return Schedule.objects.filter(
+            Q(participants=user) |
+            Q(coach=user) |
+            Q(organizer=user)
+        ).distinct()
+
+    def perform_create(self, serializer):
+        # Set organizer
+        serializer.save(organizer=self.request.user)
 
 
 # --- WHATSAPP NOTIFICATION UTILITY ---

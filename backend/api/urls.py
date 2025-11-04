@@ -4,12 +4,25 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 
-# Create a router to handle ModelViewSet URLs (Profiles, Workouts, Exercises)
+# Create a router to handle ModelViewSet URLs
 router = DefaultRouter()
 router.register('profiles', views.ProfileViewSet, basename='profile')
 router.register('workouts', views.WorkoutViewSet, basename='workout')
 router.register('exercises', views.ExerciseViewSet, basename='exercise')
 router.register('posture', views.PostureAnalysisViewSet, basename='analysis')
+router.register('tournaments', views.TournamentViewSet, basename='tournament')
+router.register('teams', views.TeamViewSet, basename='team')
+router.register('matches', views.MatchViewSet, basename='match')
+router.register('spirit-scores', views.SpiritScoreViewSet, basename='spiritscore')
+router.register('children', views.ChildProfileViewSet, basename='child')
+router.register('sessions', views.SessionViewSet, basename='session')
+router.register('attendance', views.AttendanceViewSet, basename='attendance')
+router.register('assessments', views.LifeSkillsAssessmentViewSet, basename='assessment')
+router.register('notifications', views.NotificationViewSet, basename='notification')
+router.register('fields', views.FieldViewSet, basename='field')
+router.register('tournament-brackets', views.TournamentBracketViewSet, basename='bracket')
+router.register('home-visits', views.HomeVisitViewSet, basename='homevisit')
+router.register('schedules', views.ScheduleViewSet, basename='schedule')
 
 # The main URL patterns for your 'api' app
 urlpatterns = [
@@ -20,6 +33,9 @@ urlpatterns = [
     
     # Health Check
     path('health/', views.HealthCheckView.as_view(), name='health_check'),
+
+    # Welcome Endpoint
+    path('welcome/', views.WelcomeView.as_view(), name='welcome'),
     
     # Authentication Endpoints
     path('auth/register/', views.RegisterView.as_view(), name='register'),
@@ -40,11 +56,7 @@ urlpatterns = [
     
     # Admin/Coach Endpoints
     path('admin/students-fitness/', views.AllStudentsFitnessView.as_view(), name='all_students_fitness'),
-    
-    # Tournament Endpoints
-    path('tournaments/', views.TournamentListView.as_view(), name='tournaments'),
-    path('tournaments/<int:tournament_id>/register/', views.TournamentRegisterView.as_view(), name='tournament_register'),
-    
+
     # Leaderboard
     path('leaderboard/', views.LeaderboardView.as_view(), name='leaderboard'),
     
